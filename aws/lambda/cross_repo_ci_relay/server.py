@@ -10,12 +10,12 @@ result_router = APIRouter()
 
 @webhook_router.post("/github/webhook")
 async def github_webhook(req: Request):
-	return await webhook_handler.handle_github_webhook(req)
+    return await webhook_handler.handle_github_webhook(req)
 
 
 @result_router.post("/ci/result")
 async def ci_result(req: Request):
-	return await result_handler.handle_ci_result(req)
+    return await result_handler.handle_ci_result(req)
 
 
 # ================= FastAPI apps =================
