@@ -1,6 +1,5 @@
 import hmac
 import hashlib
-import os
 import re
 import time
 
@@ -10,27 +9,25 @@ from fastapi import HTTPException
 
 from github import Auth, Github, GithubIntegration
 
+import config
 
 # ================= 配置 =================
 
 GITHUB_API = "https://api.github.com"
 
-GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "2847493")
+_CFG = config.get_config()
 
-GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "openEuler12#$").encode()
+GITHUB_APP_ID = _CFG.github_app_id
 
-GITHUB_APP_PRIVATE_KEY_PATH = os.getenv(
-    "GITHUB_APP_PRIVATE_KEY_PATH",
-    "/opt/ci-gateway/pytorch-federated-ci-cosdt.2026-02-11.private-key.pem",
-)
+GITHUB_WEBHOOK_SECRET = _CFG.github_webhook_secret_bytes
 
+GITHUB_APP_PRIVATE_KEY_PATH = _CFG.github_app_private_key_path
 
-_DEFAULT_WHITELIST_PATH = os.path.join(os.path.dirname(__file__), "whitelist.yaml")
-WHITELIST_PATH = os.getenv("WHITELIST_PATH", _DEFAULT_WHITELIST_PATH)
+WHITELIST_PATH = _CFG.whitelist_path
 
 WHITELIST_LEVELS = ("L1", "L2", "L3", "L4")
 
-UPSTREAM_REPO = os.getenv("UPSTREAM_REPO", "cosdt/Upstream")
+UPSTREAM_REPO = _CFG.upstream_repo
 
 
 def load_whitelist_by_level(path: str) -> dict[str, list[dict]]:
@@ -351,146 +348,3 @@ def ensure_ci_result_from_allowed_repo(data: dict) -> str:
             "allowed": sorted(u for u in allowed_urls if u),
         },
     )
-
-
-def create_completed_check_run(name, token, repo, device, sha, conclusion, url):
-    _gh_request_json(
-        token=token,
-        verb="POST",
-        url=f"/repos/{repo}/check-runs",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        input={
-            "name": f"oot / {device} / {name}",
-            "head_sha": sha,
-            "status": "completed",
-            "conclusion": conclusion,
-            "details_url": url,
-            "output": {
-                "title": "Downstream CI Result",
-                "summary": f"B CI finished with **{conclusion}**\n\n{url}",
-            },
-        },
-    )
-
-
-def _check_run_full_name(device: str, name: str) -> str:
-    return f"oot / {device} / {name}"
-
-
-def create_in_progress_check_run(
-    name, token, repo, device, sha, details_url: str | None = None
-):
-    payload = {
-        "name": _check_run_full_name(device, name),
-        "head_sha": sha,
-        "status": "in_progress",
-        "output": {
-            "title": "Downstream CI Running",
-            "summary": "Downstream CI has been triggered and is running.",
-        },
-    }
-    if details_url:
-        payload["details_url"] = details_url
-
-    data = _gh_request_json(
-        token=token,
-        verb="POST",
-        url=f"/repos/{repo}/check-runs",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        input=payload,
-    )
-    return (data or {}).get("id")
-
-
-def _list_check_runs_for_ref(token: str, repo: str, sha: str) -> list[dict]:
-    data = _gh_request_json(
-        token=token,
-        verb="GET",
-        url=f"/repos/{repo}/commits/{sha}/check-runs",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    return (data or {}).get("check_runs") or []
-
-
-def find_in_progress_check_run_id(
-    token: str, repo: str, sha: str, *, device: str, name: str
-) -> int | None:
-    full_name = _check_run_full_name(device, name)
-    for cr in _list_check_runs_for_ref(token, repo, sha):
-        if cr.get("name") == full_name and cr.get("status") == "in_progress":
-            cid = cr.get("id")
-            return int(cid) if cid is not None else None
-    return None
-
-
-def update_check_run_to_completed(
-    *,
-    check_run_id: int,
-    token: str,
-    repo: str,
-    conclusion: str,
-    details_url: str,
-    summary: str,
-):
-    data = _gh_request_json(
-        token=token,
-        verb="PATCH",
-        url=f"/repos/{repo}/check-runs/{check_run_id}",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-        input={
-            "status": "completed",
-            "conclusion": conclusion,
-            "details_url": details_url,
-            "output": {
-                "title": "Downstream CI Result",
-                "summary": summary,
-            },
-        },
-    )
-    print("chenjiahao")
-    return (data or {}).get("id")
-
-
-def ensure_in_progress_check_run(
-    name: str,
-    token: str,
-    repo: str,
-    device: str,
-    sha: str,
-    details_url: str | None = None,
-) -> int | None:
-    existing = find_in_progress_check_run_id(token, repo, sha, device=device, name=name)
-    if existing:
-        return existing
-    return create_in_progress_check_run(name, token, repo, device, sha, details_url)
-
-
-def upsert_completed_check_run(
-    name: str, token: str, repo: str, device: str, sha: str, conclusion: str, url: str
-):
-    """Complete an existing in-progress check-run if present; otherwise create a new completed one."""
-    summary = f"B CI finished with **{conclusion}**\n\n{url}"
-    existing = find_in_progress_check_run_id(token, repo, sha, device=device, name=name)
-    if existing:
-        return update_check_run_to_completed(
-            check_run_id=existing,
-            token=token,
-            repo=repo,
-            conclusion=conclusion,
-            details_url=url,
-            summary=summary,
-        )
-    create_completed_check_run(name, token, repo, device, sha, conclusion, url)
-    return None

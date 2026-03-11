@@ -4,3 +4,5 @@ PyJWT[cryptography]
 requests
 PyYAML
 PyGithub
+clickhouse-connect
+python-dotenv
