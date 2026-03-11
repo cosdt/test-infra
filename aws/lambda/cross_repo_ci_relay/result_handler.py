@@ -1,8 +1,4 @@
-import time
-
-import yaml
 from fastapi import HTTPException, Request
-from github import Auth, Github
 
 import utils
 from config import CONFIG
@@ -18,80 +14,18 @@ CHCliFactory.setup_client(
 
 
 _allowlist_cache: dict[str, dict] | None = None
-_allowlist_cache_ts: float = 0.0
-_ALLOWLIST_TTL: float = float(CONFIG.oot_allowlist_ttl_seconds)  # seconds
-
-
-def _gh_client_for(repo_full_name: str) -> Github:
-    """Return a PyGithub client authenticated as the App installation for repo_full_name.
-
-    Falls back to an unauthenticated client (works for public repos) when the
-    App is not installed on that repo.
-    """
-    try:
-        jwt_token = utils.create_app_jwt()
-        installation_id = utils.get_repo_installation_id(jwt_token, repo_full_name)
-        token = utils.get_installation_token(jwt_token, installation_id)
-        return Github(auth=Auth.Token(token))
-    except Exception as e:
-        print(
-            f"[gh_client] app auth failed for {repo_full_name}, using unauthenticated: {e}"
-        )
-        return Github()
 
 
 def _load_allowlist() -> dict[str, dict]:
-    """Fetch allowlist yaml from GitHub and return device → {level, repo, url, oncall}.
+    """Load local whitelist.yaml and return device → {level, repo, url, oncall}.
 
-    Result is cached for _ALLOWLIST_TTL seconds to avoid hitting the GitHub API
-    on every incoming request.
+    This endpoint should stay functional in local dev without relying on GitHub.
+    The allowlist is cached in-process; restart the server to pick up changes.
     """
-    global _allowlist_cache, _allowlist_cache_ts
-    now = time.monotonic()
-    if _allowlist_cache is not None and (now - _allowlist_cache_ts) < _ALLOWLIST_TTL:
-        return _allowlist_cache
-
-    def _load_from_local() -> dict[str, dict]:
-        return utils.load_allowlist_info_map(CONFIG.whitelist_path)
-
-    try:
-        gh = _gh_client_for(CONFIG.oot_whitelist_repo)
-        repo = gh.get_repo(CONFIG.oot_whitelist_repo)
-        file_content = repo.get_contents(CONFIG.oot_whitelist_file)  # type: ignore[arg-type]
-        raw: dict = yaml.safe_load(file_content.decoded_content) or {}  # type: ignore[union-attr]
-    except Exception as e:
-        # Common in local/dev when the App is not installed or when the path is misCONFIGured.
-        # Falling back to local whitelist.yaml keeps /ci/result functional.
-        print(
-            f"[allowlist] failed to fetch {CONFIG.oot_whitelist_repo}:{CONFIG.oot_whitelist_file}, falling back to local {CONFIG.WHITELIST_PATH}: {e}"
-        )
-        mapping = _load_from_local()
-        _allowlist_cache = mapping
-        _allowlist_cache_ts = now
-        return mapping
-
-    # Just for local testing
-    raw = yaml.safe_load(open("whitelist.yaml")) or {}
-
-    mapping: dict[str, dict] = {}
-    for level in ("L1", "L2", "L3", "L4"):
-        entries = raw.get(level) or []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            device = entry.get("device")
-            if not device:
-                continue
-            mapping[device] = {
-                "level": level,
-                "repo": entry.get("repo", ""),
-                "url": (entry.get("url") or "").rstrip("/"),
-                "oncall": entry.get("oncall") or [],
-            }
-
-    _allowlist_cache = mapping
-    _allowlist_cache_ts = now
-    return mapping
+    global _allowlist_cache
+    if _allowlist_cache is None:
+        _allowlist_cache = utils.load_allowlist_info_map(CONFIG.whitelist_path)
+    return _allowlist_cache
 
 
 def _ensure_device_from_allowlist(run_url: str, allowlist: dict) -> str:

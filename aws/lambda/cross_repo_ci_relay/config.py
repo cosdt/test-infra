@@ -28,10 +28,37 @@ def _env(name: str, default: str | None = None) -> str:
     return val
 
 
+def _require_env(name: str) -> str:
+    val = os.getenv(name)
+    if val is None or val == "":
+        hint = "Create a .env file (see .env.example) or set it in the environment."
+        if not _HAS_DOTENV:
+            hint += " Note: python-dotenv is not available, so .env will NOT be loaded automatically. Install python-dotenv or export env vars manually."
+        else:
+            hint += " If you are using a .env file, ensure you start uvicorn from the directory that contains .env (or that find_dotenv can locate it)."
+        raise RuntimeError(f"Missing required env var: {name}. {hint}")
+    return val
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or raw == "":
         return int(default)
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid int env var {name}={raw!r}") from e
+
+
+def _require_env_int(name: str) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        hint = "Create a .env file (see .env.example) or set it in the environment."
+        if not _HAS_DOTENV:
+            hint += " Note: python-dotenv is not available, so .env will NOT be loaded automatically. Install python-dotenv or export env vars manually."
+        else:
+            hint += " If you are using a .env file, ensure you start uvicorn from the directory that contains .env (or that find_dotenv can locate it)."
+        raise RuntimeError(f"Missing required env var: {name}. {hint}")
     try:
         return int(raw)
     except ValueError as e:
@@ -61,43 +88,22 @@ class RelayConfig:
     clickhouse_password: str
     clickhouse_database: str
 
-    # ---------------------------------------------------------------------
-    # Allowlist fetch (used by result_handler)
-    # ---------------------------------------------------------------------
-    oot_whitelist_repo: str
-    oot_whitelist_file: str
-    oot_allowlist_ttl_seconds: int
-
     @property
     def github_webhook_secret_bytes(self) -> bytes:
         return (self.github_webhook_secret or "").encode()
 
     @classmethod
     def from_env(cls) -> "RelayConfig":
-        default_whitelist_path = os.path.join(
-            os.path.dirname(__file__),
-            "whitelist.yaml",
-        )
         return cls(
-            github_app_id=_env("GITHUB_APP_ID", "2847493"),
-            github_webhook_secret=_env("GITHUB_WEBHOOK_SECRET", "openEuler12#$"),
-            github_app_private_key_path=_env(
-                "GITHUB_APP_PRIVATE_KEY_PATH",
-                "/opt/ci-gateway/pytorch-federated-ci-cosdt.2026-02-11.private-key.pem",
-            ),
-            whitelist_path=_env("WHITELIST_PATH", default_whitelist_path),
-            upstream_repo=_env("UPSTREAM_REPO", "cosdt/Upstream"),
-            clickhouse_url=_env("CLICKHOUSE_URL", "http://localhost:8123"),
-            clickhouse_user=_env("CLICKHOUSE_USER", "admin"),
-            clickhouse_password=_env("CLICKHOUSE_PASSWORD", "admin123"),
-            clickhouse_database=_env("CLICKHOUSE_DATABASE", "default"),
-            oot_whitelist_repo=_env("OOT_WHITELIST_REPO", "pytorch/test-infra"),
-            # Path is repo-root relative for the GitHub contents API.
-            oot_whitelist_file=_env(
-                "OOT_WHITELIST_FILE",
-                "aws/lambda/cross_repo_ci_relay/whitelist.yaml",
-            ),
-            oot_allowlist_ttl_seconds=_env_int("OOT_ALLOWLIST_TTL_SECONDS", 300),
+            github_app_id=_require_env("GITHUB_APP_ID"),
+            github_webhook_secret=_require_env("GITHUB_WEBHOOK_SECRET"),
+            github_app_private_key_path=_require_env("GITHUB_APP_PRIVATE_KEY_PATH"),
+            whitelist_path=_require_env("WHITELIST_PATH"),
+            upstream_repo=_require_env("UPSTREAM_REPO"),
+            clickhouse_url=_require_env("CLICKHOUSE_URL"),
+            clickhouse_user=_require_env("CLICKHOUSE_USER"),
+            clickhouse_password=_require_env("CLICKHOUSE_PASSWORD"),
+            clickhouse_database=_require_env("CLICKHOUSE_DATABASE"),
         )
 
 
@@ -126,7 +132,3 @@ CLICKHOUSE_URL = CONFIG.clickhouse_url
 CLICKHOUSE_USER = CONFIG.clickhouse_user
 CLICKHOUSE_PASSWORD = CONFIG.clickhouse_password
 CLICKHOUSE_DATABASE = CONFIG.clickhouse_database
-
-OOT_WHITELIST_REPO = CONFIG.oot_whitelist_repo
-OOT_WHITELIST_FILE = CONFIG.oot_whitelist_file
-OOT_ALLOWLIST_TTL_SECONDS = CONFIG.oot_allowlist_ttl_seconds
