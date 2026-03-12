@@ -6,3 +6,4 @@ PyYAML
 PyGithub
 clickhouse-connect
 python-dotenv
+redis

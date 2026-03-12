@@ -5,9 +5,6 @@ import github
 
 class GHClientFactory:
     """Thread-local cached PyGithub clients keyed by installation token.
-
-    This mirrors the idea used in pytorch-auto-revert, but is simplified for this
-    lambda: we authenticate using an installation access token.
     """
 
     _lock = threading.Lock()
@@ -45,14 +42,3 @@ def create_repository_dispatch(
 ) -> None:
     gh = GHClientFactory.get_client(token=token, timeout=timeout)
     gh.get_repo(repo_full_name).create_repository_dispatch(event_type, client_payload)
-
-
-def rerun_workflow_run(
-    *,
-    token: str,
-    repo_full_name: str,
-    run_id: int,
-    timeout: int = 20,
-) -> None:
-    gh = GHClientFactory.get_client(token=token, timeout=timeout)
-    gh.get_repo(repo_full_name).get_workflow_run(int(run_id)).rerun()

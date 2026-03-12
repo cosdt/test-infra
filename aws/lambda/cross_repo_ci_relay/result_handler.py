@@ -1,31 +1,18 @@
-from fastapi import HTTPException, Request
+import logging
+
+from fastapi import HTTPException
 
 import utils
-from config import CONFIG
+from config import RelayConfig
 from clickhouse_client_helper import CHCliFactory
+import whitelist_cache
 
-
-CHCliFactory.setup_client(
-    url=CONFIG.clickhouse_url,
-    username=CONFIG.clickhouse_user,
-    password=CONFIG.clickhouse_password,
-    database=CONFIG.clickhouse_database,
-)
-
-
-_allowlist_cache: dict[str, dict] | None = None
+logger = logging.getLogger(__name__)
 
 
 def _load_allowlist() -> dict[str, dict]:
-    """Load local whitelist.yaml and return device → {level, repo, url, oncall}.
-
-    This endpoint should stay functional in local dev without relying on GitHub.
-    The allowlist is cached in-process; restart the server to pick up changes.
-    """
-    global _allowlist_cache
-    if _allowlist_cache is None:
-        _allowlist_cache = utils.load_allowlist_info_map(CONFIG.whitelist_path)
-    return _allowlist_cache
+    """Return device → {level, repo, url, oncall} via the Redis-backed whitelist cache."""
+    return whitelist_cache.load_allowlist_info_map()
 
 
 def _ensure_device_from_allowlist(run_url: str, allowlist: dict) -> str:
@@ -52,69 +39,14 @@ def _ensure_device_from_allowlist(run_url: str, allowlist: dict) -> str:
     )
 
 
-_ch_table_ensured = False
+def handle_ci_result(config: RelayConfig, data: dict):
 
-
-def _ch_ensure_table():
-    """Create oot_ci_results table if it does not exist (idempotent)."""
-    global _ch_table_ensured
-    if _ch_table_ensured:
-        return
-    sql = """
-CREATE TABLE IF NOT EXISTS oot_ci_results (
-    recorded_at   DateTime DEFAULT now(),
-    device        String,
-    upstream_repo String,
-    commit_sha    String,
-    workflow_name String,
-    conclusion    String,
-    status        String,
-    run_url       String
-) ENGINE = MergeTree()
-ORDER BY (upstream_repo, commit_sha, device)
-""".strip()
-    CHCliFactory().client.command(sql)
-    _ch_table_ensured = True
-
-
-def _ch_write(
-    *,
-    device: str,
-    upstream_repo: str,
-    commit_sha: str,
-    workflow_name: str,
-    status: str,
-    conclusion: str,
-    run_url: str,
-):
-    """Insert one result row into oot_ci_results."""
-    CHCliFactory().client.insert(
-        "oot_ci_results",
-        [
-            [
-                device,
-                upstream_repo,
-                commit_sha,
-                workflow_name,
-                conclusion,
-                status,
-                run_url,
-            ]
-        ],
-        column_names=[
-            "device",
-            "upstream_repo",
-            "commit_sha",
-            "workflow_name",
-            "conclusion",
-            "status",
-            "run_url",
-        ],
+    CHCliFactory.setup_client(
+        url=config.clickhouse_url,
+        username=config.clickhouse_user,
+        password=config.clickhouse_password,
+        database=config.clickhouse_database,
     )
-
-
-async def handle_ci_result(req: Request):
-    data = await req.json()
 
     run_url = data.get("url", "")
     allowlist = _load_allowlist()
@@ -127,15 +59,18 @@ async def handle_ci_result(req: Request):
     upstream_repo = data["upstream_repo"]
     commit_sha = data["commit_sha"]
     conclusion = data["conclusion"]  # success / failure / cancelled
-    print(f"[{device}] CI finished: {conclusion} (level={level})")
+    logger.info("[%s] CI finished: conclusion=%s status=%s level=%s workflow=%s",
+                device, conclusion, status, level, workflow_name)
 
     # ── L1: forward only, no feedback to upstream ──────────────────────────
     if level == "L1":
+        logger.debug("[%s] L1 device – ignored", device)
         return {"ok": True, "action": "ignored"}
 
     # ── L2+: write result to ClickHouse (OOT HUD) ──────────────────────────
-    _ch_ensure_table()
-    _ch_write(
+    ch = CHCliFactory()
+    ch.ensure_table()
+    ch.write_ci_result(
         device=device,
         upstream_repo=upstream_repo,
         commit_sha=commit_sha,
@@ -144,6 +79,8 @@ async def handle_ci_result(req: Request):
         conclusion=conclusion,
         run_url=run_url,
     )
+    logger.info("[%s] result written to ClickHouse", device)
 
     if level == "L2":
+        logger.debug("[%s] L2 device – hud_only", device)
         return {"ok": True, "action": "hud_only"}

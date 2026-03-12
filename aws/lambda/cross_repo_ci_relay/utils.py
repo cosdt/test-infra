@@ -1,33 +1,18 @@
 import hmac
 import hashlib
+import logging
 import re
-import time
-
-import jwt
 import yaml
 from fastapi import HTTPException
 
 from github import Auth, Github, GithubIntegration
 
-import config
+from config import RelayConfig
 
-# ================= 配置 =================
+logger = logging.getLogger(__name__)
 
-GITHUB_API = "https://api.github.com"
-
-_CFG = config.get_config()
-
-GITHUB_APP_ID = _CFG.github_app_id
-
-GITHUB_WEBHOOK_SECRET = _CFG.github_webhook_secret_bytes
-
-GITHUB_APP_PRIVATE_KEY_PATH = _CFG.github_app_private_key_path
-
-WHITELIST_PATH = _CFG.whitelist_path
 
 WHITELIST_LEVELS = ("L1", "L2", "L3", "L4")
-
-UPSTREAM_REPO = _CFG.upstream_repo
 
 
 def load_whitelist_by_level(path: str) -> dict[str, list[dict]]:
@@ -67,18 +52,30 @@ def load_whitelist_by_level(path: str) -> dict[str, list[dict]]:
     return by_level
 
 
-def load_allowlist_info_map(path: str) -> dict[str, dict]:
-    """Parse whitelist.yaml and return device → {level, repo, url, oncall}.
+def parse_allowlist_info_map(raw: dict) -> dict[str, dict]:
+    """Parse an already-loaded whitelist dict and return device → {level, repo, url, oncall}.
 
-    - Preserves L1/L2/L3/L4 semantics in the returned info.
-    - `url` can be provided directly or derived from `repo`.
+    This is the core parsing logic shared by load_allowlist_info_map (file-based)
+    and whitelist_cache (Redis-backed).  Accepts the top-level dict as returned
+    by yaml.safe_load on a whitelist YAML.
     """
-    by_level = load_whitelist_by_level(path)
+    if not isinstance(raw, dict):
+        raise RuntimeError(
+            f"Invalid whitelist: expected dict (with L1-L4), got {type(raw).__name__}"
+        )
+    # Backward-compatible: bare list treated as L1 entries.
+    if isinstance(raw, list):
+        raw = {"L1": raw}
+
     mapping: dict[str, dict] = {}
     errors: list[str] = []
 
     for level in WHITELIST_LEVELS:
-        entries = by_level.get(level) or []
+        entries = raw.get(level) or []
+        if not isinstance(entries, list):
+            raise RuntimeError(
+                f"Invalid whitelist: key {level} must map to a list, got {type(entries).__name__}"
+            )
         for idx, entry in enumerate(entries):
             if not isinstance(entry, dict):
                 errors.append(
@@ -118,10 +115,20 @@ def load_allowlist_info_map(path: str) -> dict[str, dict]:
     if errors:
         preview = errors[:10]
         raise RuntimeError(
-            "Invalid whitelist.yaml; fix config errors: " + "; ".join(preview)
+            "Invalid whitelist; fix config errors: " + "; ".join(preview)
         )
 
     return mapping
+
+
+def load_allowlist_info_map(path: str) -> dict[str, dict]:
+    """Parse whitelist.yaml and return device → {level, repo, url, oncall}.
+
+    - Preserves L1/L2/L3/L4 semantics in the returned info.
+    - `url` can be provided directly or derived from `repo`.
+    """
+    by_level = load_whitelist_by_level(path)
+    return parse_allowlist_info_map(by_level)
 
 
 def load_allowlist_map(path: str) -> dict[str, str]:
@@ -130,24 +137,25 @@ def load_allowlist_map(path: str) -> dict[str, str]:
     return {device: info.get("url", "") for device, info in info_map.items()}
 
 
-whitelist_by_level: dict[str, list[dict]] = load_whitelist_by_level(WHITELIST_PATH)
-allowlist_info_map: dict[str, dict] = load_allowlist_info_map(WHITELIST_PATH)
-allowlist_map: dict[str, str] = {
-    k: v.get("url", "") for k, v in allowlist_info_map.items()
-}
-
-
-with open(GITHUB_APP_PRIVATE_KEY_PATH, "r") as f:
-    PRIVATE_KEY = f.read()
+def get_private_key(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"GitHub App private key file not found: {path}. Set GITHUB_APP_PRIVATE_KEY_PATH or create the file."
+        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Failed to read GitHub App private key: {path}: {e}") from e
 
 
 _integration: GithubIntegration | None = None
 
 
-def _get_integration() -> GithubIntegration:
+def _get_integration(config: RelayConfig) -> GithubIntegration:
     global _integration
     if _integration is None:
-        _integration = GithubIntegration(int(GITHUB_APP_ID), PRIVATE_KEY)
+        _integration = GithubIntegration(int(config.github_app_id), get_private_key(config.github_app_private_key_path))
     return _integration
 
 
@@ -175,32 +183,20 @@ def _gh_request_json(
 # ================= 基础工具 =================
 
 
-def verify_signature(body: bytes, signature: str):
-    mac = hmac.new(GITHUB_WEBHOOK_SECRET, body, hashlib.sha256)
+def verify_signature(config: RelayConfig, body: bytes, signature: str):
+    mac = hmac.new(config.github_webhook_secret_bytes, body, hashlib.sha256)
     expected = "sha256=" + mac.hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=401, detail="Bad signature")
 
 
-def create_app_jwt():
-    now = int(time.time())
-    payload = {
-        "iat": now - 60,
-        "exp": now + 600,
-        "iss": GITHUB_APP_ID,
-    }
-    return jwt.encode(payload, PRIVATE_KEY, algorithm="RS256")
-
-
-def get_installation_token(jwt_token, installation_id):
+def get_installation_token(config: RelayConfig, installation_id):
     # Keep signature for compatibility; use PyGithub integration internally.
-    return _get_integration().get_access_token(int(installation_id)).token
+    return _get_integration(config).get_access_token(int(installation_id)).token
 
 
-def list_installation_repositories(installation_token: str):
+def list_installation_repositories(installation_token: str, max_results: int = 1000) -> list[dict]:
     """List repositories accessible to a GitHub App installation.
-
-    Uses the installation access token (not the App JWT).
     """
     repos = []
     page = 1
@@ -225,7 +221,7 @@ def list_installation_repositories(installation_token: str):
             }
             for repo in chunk
         )
-        if len(chunk) < 100:
+        if len(repos) >= max_results:
             break
         page += 1
     return repos
@@ -247,73 +243,6 @@ def pick_repo_full_name_by_allowlist(repos, allow_url: str):
     return {"ambiguous": [r.get("full_name") for r in matches]}
 
 
-def allowlist_find_device_by_repo_html_url(repo_html_url: str) -> str | None:
-    repo_html_url_n = _norm_url(repo_html_url)
-    for device, allow_url in allowlist_map.items():
-        if _norm_url(allow_url) == repo_html_url_n:
-            return device
-    return None
-
-
-def allowlist_pick_single_device() -> str:
-    if len(allowlist_map) != 1:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "allowlist_map must contain exactly one downstream device for pull_request dispatch",
-                "devices": sorted(allowlist_map.keys()),
-            },
-        )
-    return next(iter(allowlist_map.keys()))
-
-
-def pick_repo_full_name(repos, *, name: str, preferred_full_name: str | None = None):
-    """Pick a repo full_name from a list by repo name.
-
-    Returns:
-      - str full_name when uniquely resolved
-      - None when not found
-      - {"ambiguous": [...]} when multiple matches exist
-    """
-    print(
-        f"Looking for repo name={name} among {[r.get('full_name') for r in repos]} with preferred_full_name={preferred_full_name}"
-    )
-    matches = [r for r in repos if r.get("name") == name]
-    if not matches:
-        return None
-    if preferred_full_name:
-        for r in matches:
-            if r.get("full_name") == preferred_full_name:
-                return preferred_full_name
-    if len(matches) == 1:
-        return matches[0].get("full_name")
-    return {"ambiguous": [r.get("full_name") for r in matches]}
-
-
-def parse_actions_run_from_url(url: str):
-    """Parse owner/repo and run_id from a GitHub Actions run URL.
-
-    Supports:
-      - https://github.com/<owner>/<repo>/actions/runs/<run_id>
-      - https://github.com/<owner>/<repo>/runs/<run_id>
-    """
-    if not url:
-        return None
-    m = re.search(r"github\.com/([^/]+)/([^/]+)/(?:actions/)?runs/(\d+)", url)
-    if not m:
-        return None
-    owner, repo, run_id = m.group(1), m.group(2), int(m.group(3))
-    return owner, repo, run_id
-
-
-def get_repo_installation_id(jwt_token: str, repo_full_name: str) -> int:
-    if "/" not in repo_full_name:
-        raise ValueError(f"Invalid repo full_name: {repo_full_name}")
-    owner, repo = repo_full_name.split("/", 1)
-    inst = _get_integration().get_repo_installation(owner, repo)
-    return int(inst.id)
-
-
 def _repo_html_url_from_actions_run_url(run_url: str) -> str | None:
     u = run_url or ""
     # Support both html URL and API URL forms
@@ -324,27 +253,3 @@ def _repo_html_url_from_actions_run_url(run_url: str) -> str | None:
     if m:
         return f"https://github.com/{m.group(1)}/{m.group(2)}"
     return None
-
-
-def ensure_ci_result_from_allowed_repo(data: dict) -> str:
-    run_url = data.get("url")
-    if not run_url:
-        raise HTTPException(status_code=400, detail="Missing url")
-
-    repo_html_url = _repo_html_url_from_actions_run_url(run_url)
-    if not repo_html_url:
-        raise HTTPException(status_code=400, detail=f"Unsupported url: {run_url}")
-
-    device = allowlist_find_device_by_repo_html_url(repo_html_url)
-    if device:
-        return device
-
-    allowed_urls = {_norm_url(v) for v in allowlist_map.values()}
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "message": "ci/result rejected: run url repo is not allowlisted",
-            "repo_html_url": repo_html_url,
-            "allowed": sorted(u for u in allowed_urls if u),
-        },
-    )
