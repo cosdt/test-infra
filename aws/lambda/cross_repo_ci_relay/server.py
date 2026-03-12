@@ -37,8 +37,11 @@ async def github_webhook(req: Request):
 @result_router.post("/ci/result")
 async def ci_result(req: Request):
     data = await req.json()
-    logger.info("ci/result received upstream_repo=%s commit_sha=%s",
-                data.get("upstream_repo"), data.get("commit_sha"))
+    logger.info(
+        "ci/result received upstream_repo=%s commit_sha=%s",
+        data.get("upstream_repo"),
+        data.get("commit_sha"),
+    )
 
     relay_config = RelayConfig.from_env()
     return result_handler.handle_ci_result(relay_config, data)
