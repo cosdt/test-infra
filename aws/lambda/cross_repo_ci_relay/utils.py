@@ -200,18 +200,21 @@ def list_installation_repositories(installation_token: str, max_results: int = 1
     """
     repos = []
     page = 1
+    per_page = 100
     while True:
         data = _gh_request_json(
             token=installation_token,
             verb="GET",
             url="/installation/repositories",
-            parameters={"per_page": 100, "page": page},
+            parameters={"per_page": per_page, "page": page},
             headers={
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
         )
         chunk = (data or {}).get("repositories", [])
+        if not chunk:
+            break
         # Keep only what we need (avoid passing huge objects around)
         repos.extend(
             {
@@ -221,9 +224,14 @@ def list_installation_repositories(installation_token: str, max_results: int = 1
             }
             for repo in chunk
         )
+
+        total_count = (data or {}).get("total_count")
+        if isinstance(total_count, int) and total_count >= 0 and len(repos) >= total_count:
+            break
         if len(repos) >= max_results:
             break
         page += 1
+    logger.info("installation repositories listed count=%d", len(repos))
     return repos
 
 

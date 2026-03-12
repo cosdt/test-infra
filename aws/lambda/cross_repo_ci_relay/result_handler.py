@@ -10,11 +10,6 @@ import whitelist_cache
 logger = logging.getLogger(__name__)
 
 
-def _load_allowlist() -> dict[str, dict]:
-    """Return device → {level, repo, url, oncall} via the Redis-backed whitelist cache."""
-    return whitelist_cache.load_allowlist_info_map()
-
-
 def _ensure_device_from_allowlist(run_url: str, allowlist: dict) -> str:
     """Validate run_url against allowlist and return the matching device name."""
     if not run_url:
@@ -49,7 +44,7 @@ def handle_ci_result(config: RelayConfig, data: dict):
     )
 
     run_url = data.get("url", "")
-    allowlist = _load_allowlist()
+    allowlist = whitelist_cache.load_allowlist_info_map(config)
     device = _ensure_device_from_allowlist(run_url, allowlist)
     info = allowlist[device]
     level = info["level"]
@@ -64,7 +59,7 @@ def handle_ci_result(config: RelayConfig, data: dict):
 
     # ── L1: forward only, no feedback to upstream ──────────────────────────
     if level == "L1":
-        logger.debug("[%s] L1 device – ignored", device)
+        logger.debug("[%s] L1 device - ignored", device)
         return {"ok": True, "action": "ignored"}
 
     # ── L2+: write result to ClickHouse (OOT HUD) ──────────────────────────
@@ -82,5 +77,5 @@ def handle_ci_result(config: RelayConfig, data: dict):
     logger.info("[%s] result written to ClickHouse", device)
 
     if level == "L2":
-        logger.debug("[%s] L2 device – hud_only", device)
+        logger.debug("[%s] L2 device - hud_only", device)
         return {"ok": True, "action": "hud_only"}

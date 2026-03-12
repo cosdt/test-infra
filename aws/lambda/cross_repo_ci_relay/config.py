@@ -39,7 +39,9 @@ class RelayConfig:
 
     @classmethod
     def from_env(cls) -> "RelayConfig":
-        load_dotenv(find_dotenv(usecwd=True), override=False)
+        # Do not depend on process cwd (uvicorn reload/app-dir can change it).
+        # Default find_dotenv behavior searches relative to this file.
+        load_dotenv(find_dotenv(usecwd=False), override=False)
         return cls(
             github_app_id=os.getenv("GITHUB_APP_ID"),
             github_webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET"),

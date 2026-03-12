@@ -19,7 +19,7 @@ def _handle_pull_request(config: RelayConfig, payload: dict) -> dict:
     installation_id = payload["installation"]["id"]
     action = payload["action"]
 
-    if repo != config.upstream_repo:
+    if repo.lower() != config.upstream_repo.lower():
         return {"ignored": True}
 
     if action not in ("opened", "reopened", "synchronize"):
