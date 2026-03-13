@@ -1,7 +1,6 @@
 import hmac
 import hashlib
 import logging
-from fastapi import HTTPException
 
 from github import Auth, Github, GithubIntegration
 
@@ -14,18 +13,11 @@ WHITELIST_LEVELS = ("L1", "L2", "L3", "L4")
 
 
 def parse_allowlist_info_map(raw: dict) -> dict[str, dict]:
-    """Parse an already-loaded whitelist dict and return device → {level, repo, url, oncall}.
-
-    This is the core parsing logic used by the Redis-backed whitelist helper.
-    Accepts the top-level dict as returned by safe YAML loading.
-    """
+    """Parse a whitelist dict and return device → {level, repo, url, oncall}."""
     if not isinstance(raw, dict):
         raise RuntimeError(
             f"Invalid whitelist: expected dict (with L1-L4), got {type(raw).__name__}"
         )
-    # Backward-compatible: bare list treated as L1 entries.
-    if isinstance(raw, list):
-        raw = {"L1": raw}
 
     mapping: dict[str, dict] = {}
     errors: list[str] = []
@@ -86,15 +78,21 @@ _integration: GithubIntegration | None = None
 # ================= Core utilities =================
 
 
-def verify_signature(config: RelayConfig, body: bytes, signature: str):
+class RelayHTTPException(Exception):
+    def __init__(self, status_code: int, detail):
+        self.status_code = status_code
+        self.detail = detail
+
+
+def verify_signature(config: RelayConfig, body: bytes, signature: str) -> None:
     mac = hmac.new(config.github_webhook_secret_bytes, body, hashlib.sha256)
     expected = "sha256=" + mac.hexdigest()
     if not hmac.compare_digest(expected, signature):
-        raise HTTPException(status_code=401, detail="Bad signature")
+        logger.warning("webhook signature mismatch")
+        raise RelayHTTPException(status_code=401, detail="Bad signature")
 
 
-def get_installation_token(config: RelayConfig, installation_id):
-    # Keep signature for compatibility; use PyGithub integration internally.
+def get_installation_token(config: RelayConfig, installation_id: int) -> str:
     global _integration
     if _integration is None:
         try:
@@ -102,23 +100,24 @@ def get_installation_token(config: RelayConfig, installation_id):
                 private_key = f.read()
         except FileNotFoundError as e:
             raise RuntimeError(
-                f"GitHub App private key file not found: {config.github_app_private_key_path}. "
-                "Set GITHUB_APP_PRIVATE_KEY_PATH or create the file."
+                f"GitHub App private key not found: {config.github_app_private_key_path}"
             ) from e
         except Exception as e:
             raise RuntimeError(
-                f"Failed to read GitHub App private key: {config.github_app_private_key_path}: {e}"
+                f"Failed to read GitHub App private key: {e}"
             ) from e
-
         _integration = GithubIntegration(int(config.github_app_id), private_key)
+        logger.debug("GithubIntegration initialized app_id=%s", config.github_app_id)
 
-    return _integration.get_access_token(int(installation_id)).token
+    token = _integration.get_access_token(int(installation_id)).token
+    logger.debug("installation token obtained installation_id=%s", installation_id)
+    return token
 
 
 def list_installation_repositories(
     installation_token: str, max_results: int = 1000
 ) -> list[dict]:
-    """List repositories accessible to a GitHub App installation."""
+    """List repositories accessible to a GitHub App installation token."""
     repos = []
     page = 1
     per_page = 100

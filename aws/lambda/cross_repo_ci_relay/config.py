@@ -6,30 +6,15 @@ from dotenv import find_dotenv, load_dotenv
 
 @dataclass(frozen=True)
 class RelayConfig:
-    # ---------------------------------------------------------------------
-    # GitHub App / Webhook
-    # ---------------------------------------------------------------------
     github_app_id: str
     github_webhook_secret: str
     github_app_private_key_path: str
-
-    # ---------------------------------------------------------------------
-    # Relay behavior
-    # ---------------------------------------------------------------------
     whitelist_path: str
     upstream_repo: str
-
-    # ---------------------------------------------------------------------
-    # ClickHouse
-    # ---------------------------------------------------------------------
     clickhouse_url: str
     clickhouse_user: str
     clickhouse_password: str
     clickhouse_database: str
-
-    # ---------------------------------------------------------------------
-    # Redis (whitelist cache)
-    # ---------------------------------------------------------------------
     redis_url: str
     whitelist_ttl_seconds: int
 
@@ -39,8 +24,6 @@ class RelayConfig:
 
     @classmethod
     def from_env(cls) -> "RelayConfig":
-        # Do not depend on process cwd (uvicorn reload/app-dir can change it).
-        # Default find_dotenv behavior searches relative to this file.
         load_dotenv(find_dotenv(usecwd=False), override=False)
         return cls(
             github_app_id=os.getenv("GITHUB_APP_ID"),
@@ -54,37 +37,4 @@ class RelayConfig:
             clickhouse_database=os.getenv("CLICKHOUSE_DATABASE"),
             redis_url=os.getenv("REDIS_URL", ""),
             whitelist_ttl_seconds=int(os.getenv("WHITELIST_TTL_SECONDS", 1200)),
-        )
-
-    @classmethod
-    def from_event(cls, event: dict) -> "RelayConfig":
-        """For testing: construct config from a GitHub event payload."""
-        return cls(
-            github_app_id=event.get("github_app_id", ""),
-            github_webhook_secret=event.get("github_webhook_secret", ""),
-            github_app_private_key_path=event.get("github_app_private_key_path", ""),
-            whitelist_path=event.get("whitelist_path", ""),
-            upstream_repo=event.get("upstream_repo", ""),
-            clickhouse_url=event.get("clickhouse_url", ""),
-            clickhouse_user=event.get("clickhouse_user", ""),
-            clickhouse_password=event.get("clickhouse_password", ""),
-            clickhouse_database=event.get("clickhouse_database", ""),
-            redis_url=event.get("redis_url", ""),
-            whitelist_ttl_seconds=int(event.get("whitelist_ttl_seconds", 1200)),
-        )
-
-    @classmethod
-    def default_env(cls) -> "RelayConfig":
-        return cls(
-            github_app_id="",
-            github_webhook_secret="",
-            github_app_private_key_path="",
-            whitelist_path="",
-            upstream_repo="",
-            clickhouse_url="",
-            clickhouse_user="",
-            clickhouse_password="",
-            clickhouse_database="",
-            redis_url="",
-            whitelist_ttl_seconds=1200,
         )

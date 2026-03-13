@@ -1,14 +1,17 @@
 import logging
 
-from fastapi import HTTPException
-
 from github.GithubException import GithubException
 
 import github_client_helper
-import utils
-import whitelist_redis_helper as whitelist_redis_helper
-
+import whitelist_redis_helper
 from config import RelayConfig
+from utils import (
+    RelayHTTPException,
+    get_installation_token,
+    list_installation_repositories,
+    pick_repo_full_name_by_allowlist,
+    verify_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +24,12 @@ def handle_github_webhook(
     event: str,
 ):
     if not signature:
-        raise HTTPException(status_code=400, detail="No signature")
-    utils.verify_signature(config, body, signature)
+        raise RelayHTTPException(status_code=400, detail="No signature")
+    verify_signature(config, body, signature)
 
     # Only pull_request events are consumed by this relay.
     if event != "pull_request":
-        logger.debug("webhook event=%s ignored", event)
+        logger.debug("event=%s ignored", event)
         return {"ignored": True}
 
     repo = payload["repository"]["full_name"]
@@ -35,12 +38,14 @@ def handle_github_webhook(
     action = payload["action"]
 
     if repo.lower() != config.upstream_repo.lower():
+        logger.debug("pull_request repo=%s not upstream, ignored", repo)
         return {"ignored": True}
 
     if action not in ("opened", "reopened", "synchronize"):
+        logger.debug("pull_request action=%s ignored", action)
         return {"ignored": True}
 
-    installation_token = utils.get_installation_token(config, int(installation_id))
+    installation_token = get_installation_token(config, int(installation_id))
 
     labels = [
         l.get("name")
@@ -51,8 +56,7 @@ def handle_github_webhook(
         "pull_request action=%s repo=%s sha=%.12s labels=%s", action, repo, sha, labels
     )
 
-    # Resolve allowlisted repositories and dispatch downstream events.
-    repos = utils.list_installation_repositories(installation_token)
+    repos = list_installation_repositories(installation_token)
     allowlist_info_map = whitelist_redis_helper.load_allowlist_info_map(config)
     allowlist_map = {
         device: info.get("url", "")
@@ -60,12 +64,12 @@ def handle_github_webhook(
         if info.get("url")
     }
     if not allowlist_map:
-        raise HTTPException(status_code=400, detail="allowlist_map is empty")
+        raise RelayHTTPException(status_code=400, detail="allowlist is empty")
 
     dispatched: list[dict] = []
     failed: list[dict] = []
     for downstream_device, allow_url in sorted(allowlist_map.items()):
-        picked = utils.pick_repo_full_name_by_allowlist(repos, allow_url)
+        picked = pick_repo_full_name_by_allowlist(repos, allow_url)
         if not picked:
             logger.warning(
                 "dispatch skipped device=%s allow_url=%s reason=repo_not_accessible",
@@ -148,7 +152,7 @@ def handle_github_webhook(
 
     if not dispatched:
         logger.error("no downstream dispatch succeeded failed=%s", failed)
-        raise HTTPException(
+        raise RelayHTTPException(
             status_code=403,
             detail={
                 "message": "No downstream dispatch succeeded",

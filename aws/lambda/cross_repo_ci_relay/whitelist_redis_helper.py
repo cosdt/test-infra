@@ -1,16 +1,4 @@
-"""Redis-backed whitelist cache.
-
-The raw whitelist YAML text is stored in Redis under _REDIS_KEY with a TTL of
-CONFIG.whitelist_ttl_seconds (default 1200 s / 20 min).
-
-Read path:
-  1. Check Redis for the cached YAML string.
-  2. Hit  → yaml.safe_load + parse → return mapping.
-  3. Miss → read local file → write to Redis with TTL → parse → return mapping.
-
-Both result_handler and webhook_handler use this module so that a whitelist
-update takes effect within at most one TTL period without a server restart.
-"""
+"""Redis-backed whitelist cache (TTL-based, shared by both Lambda functions)."""
 
 import logging
 from urllib.parse import urlparse
@@ -31,11 +19,7 @@ _redis_client: redis_lib.Redis | None = None
 
 
 def _read_whitelist_from_github_url(url: str) -> str:
-    """Read whitelist YAML content from a GitHub blob URL via PyGithub SDK.
-
-    Supported format:
-      https://github.com/<owner>/<repo>/blob/<ref>/<path/to/file.yaml>
-    """
+    """Fetch whitelist YAML from a GitHub blob URL (https://github.com/<owner>/<repo>/blob/<ref>/<path>)."""
     parsed = urlparse(url)
     parts = [p for p in parsed.path.split("/") if p]
     if (
@@ -73,7 +57,7 @@ def _get_redis(config: RelayConfig) -> redis_lib.Redis:
 
 
 def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
-    """Return device → {level, repo, url, oncall} from the Redis-cached whitelist."""
+    """Return device → {level, repo, url, oncall}, loaded from Redis cache or local file."""
     r = _get_redis(config)
     cached = r.get(_REDIS_KEY)
     if cached is not None:

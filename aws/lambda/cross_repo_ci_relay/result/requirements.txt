@@ -1,7 +1,3 @@
-fastapi
-uvicorn
-mangum
-PyJWT[cryptography]
 requests
 PyYAML
 PyGithub

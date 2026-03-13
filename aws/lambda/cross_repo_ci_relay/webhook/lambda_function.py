@@ -1,25 +1,22 @@
-"""AWS Lambda entrypoint for cross_repo_ci_relay.
-
-This repo's Lambda convention expects `lambda_function.lambda_handler`.
-We adapt the FastAPI app defined in `server.py` using Mangum.
-
-Secrets note:
-- If `GITHUB_APP_PRIVATE_KEY_SECRET_ARN` is set, the secret is fetched from
-  AWS Secrets Manager at cold start and written to `/tmp/`.
-- `GITHUB_APP_PRIVATE_KEY_PATH` will be set to that `/tmp/` file path.
-"""
+"""Lambda entrypoint for cross_repo_ci_webhook — handles POST /github/webhook."""
 
 from __future__ import annotations
 
 import base64
+import json
+import logging
 import os
 import stat
 from pathlib import Path
 
 import boto3
-from mangum import Mangum
 
-from server import app
+import webhook_handler
+from config import RelayConfig
+from utils import RelayHTTPException
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
 
 
 _secrets_client = None
@@ -49,11 +46,8 @@ def _maybe_set_env_from_secret(*, env_key: str, secret_arn_env_key: str) -> None
     secret_arn = os.getenv(secret_arn_env_key)
     if not secret_arn:
         return
-
-    # If env var already has a non-empty value, respect it.
     if os.getenv(env_key):
         return
-
     os.environ[env_key] = _fetch_secret_text(secret_arn)
 
 
@@ -62,11 +56,9 @@ def _write_private_key_from_secrets_manager() -> None:
     if not secret_arn:
         return
 
-    # If the caller doesn't specify a path, default to /tmp (writable on Lambda).
     private_key_path = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH") or "/tmp/github_app_private_key.pem"
     path = Path(private_key_path)
 
-    # Avoid repeated network calls on warm invocations.
     if path.exists() and path.stat().st_size > 0:
         os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(path)
         return
@@ -82,14 +74,50 @@ def _write_private_key_from_secrets_manager() -> None:
 
 # One-time cold-start initialization.
 _maybe_set_env_from_secret(env_key="GITHUB_WEBHOOK_SECRET", secret_arn_env_key="GITHUB_WEBHOOK_SECRET_SECRET_ARN")
-_maybe_set_env_from_secret(env_key="CLICKHOUSE_PASSWORD", secret_arn_env_key="CLICKHOUSE_PASSWORD_SECRET_ARN")
 _maybe_set_env_from_secret(env_key="REDIS_URL", secret_arn_env_key="REDIS_URL_SECRET_ARN")
 _write_private_key_from_secrets_manager()
 
+_config = RelayConfig.from_env()
 
-# Lambda handler (API Gateway / Function URL / ALB).
-_lambda = Mangum(app)
+_JSON_HEADERS = {"content-type": "application/json"}
+
+
+def _ok(data) -> dict:
+    return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(data)}
+
+
+def _error(status_code: int, detail) -> dict:
+    return {"statusCode": status_code, "headers": _JSON_HEADERS, "body": json.dumps({"detail": detail})}
 
 
 def lambda_handler(event, context):
-    return _lambda(event, context)
+    http = event.get("requestContext", {}).get("http", {})
+    method = http.get("method", "").upper()
+    path = http.get("path", "")
+
+    raw_body = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        body_bytes = base64.b64decode(raw_body)
+    else:
+        body_bytes = raw_body.encode("utf-8")
+
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+
+    if method != "POST" or path != "/github/webhook":
+        if path == "/github/webhook":
+            return _error(405, "Method not allowed")
+        return _error(404, "Not found")
+
+    logger.info("request method=%s path=%s", method, path)
+    try:
+        payload = json.loads(body_bytes) if body_bytes else {}
+        result = webhook_handler.handle_github_webhook(
+            _config,
+            body_bytes,
+            payload,
+            headers.get("x-hub-signature-256", ""),
+            headers.get("x-github-event", ""),
+        )
+        return _ok(result)
+    except RelayHTTPException as exc:
+        return _error(exc.status_code, exc.detail)
