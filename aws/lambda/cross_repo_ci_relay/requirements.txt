@@ -1,5 +1,0 @@
-fastapi
-uvicorn
-PyJWT[cryptography]
-requests
-PyYAML
