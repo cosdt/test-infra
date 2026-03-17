@@ -4,18 +4,16 @@ import logging
 from urllib.parse import urlparse
 
 import yaml
-import redis as redis_lib
 from github import Github
 from github.GithubException import GithubException
 
 import utils
 from config import RelayConfig
+from redis_client_helper import RedisClientFactory
 
 logger = logging.getLogger(__name__)
 
 _REDIS_KEY = "oot:whitelist_yaml"
-
-_redis_client: redis_lib.Redis | None = None
 
 
 def _read_whitelist_from_github_url(url: str) -> str:
@@ -49,16 +47,9 @@ def _read_whitelist_from_github_url(url: str) -> str:
         ) from e
 
 
-def _get_redis(config: RelayConfig) -> redis_lib.Redis:
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis_lib.from_url(config.redis_url, decode_responses=True)
-    return _redis_client
-
-
 def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
     """Return device → {level, repo, url, oncall}, loaded from Redis cache or local file."""
-    r = _get_redis(config)
+    r = RedisClientFactory.get_client()
     cached = r.get(_REDIS_KEY)
     if cached is not None:
         logger.debug("whitelist cache hit key=%s", _REDIS_KEY)
