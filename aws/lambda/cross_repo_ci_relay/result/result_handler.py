@@ -2,8 +2,9 @@ import logging
 import re
 
 from config import RelayConfig
-from utils import RelayHTTPException, get_installation_token
+from utils import RelayHTTPException
 from clickhouse_client_helper import CHCliFactory
+from github_client_helper import GithubAppFactory
 import whitelist_redis_helper
 import pr_redis_helper
 import checkrun_helper
@@ -108,8 +109,8 @@ def handle_ci_result(config: RelayConfig, data: dict):
             )
             if should_act:
                 installation_id = pr_info["installation_id"]
-                installation_token = get_installation_token(
-                    config, int(installation_id)
+                installation_token = GithubAppFactory.get_installation_token(
+                    int(installation_id)
                 )
 
                 if status == "completed":
@@ -121,7 +122,6 @@ def handle_ci_result(config: RelayConfig, data: dict):
                     # sha/device/workflow in in_progress state, update it to completed
                     if existing_cr_id > 0:
                         checkrun_helper.update_check_run(
-                            config=config,
                             installation_token=installation_token,
                             upstream_repo=upstream_repo,
                             upstream_check_run_id=existing_cr_id,
@@ -138,7 +138,6 @@ def handle_ci_result(config: RelayConfig, data: dict):
                         # Label was added after Call 1 (or Call 1 had no label yet);
                         # create a completed check run directly.
                         upstream_check_run_id = checkrun_helper.create_check_run(
-                            config=config,
                             installation_token=installation_token,
                             upstream_repo=upstream_repo,
                             sha=commit_sha,
@@ -153,7 +152,6 @@ def handle_ci_result(config: RelayConfig, data: dict):
                 else:
                     # Call 1 (in_progress): always create a fresh check run.
                     upstream_check_run_id = checkrun_helper.create_check_run(
-                        config=config,
                         installation_token=installation_token,
                         upstream_repo=upstream_repo,
                         sha=commit_sha,

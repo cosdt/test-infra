@@ -11,6 +11,8 @@ import boto3
 
 import webhook_handler
 from config import RelayConfig
+from github_client_helper import GithubAppFactory
+from redis_client_helper import RedisClientFactory
 from utils import RelayHTTPException
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -55,6 +57,8 @@ _maybe_set_env_from_secret(env_key="REDIS_URL", secret_arn_env_key="REDIS_URL_SE
 _maybe_set_env_from_secret(env_key="GITHUB_APP_PRIVATE_KEY", secret_arn_env_key="GITHUB_APP_PRIVATE_KEY_SECRET_ARN")
 
 _config = RelayConfig.from_env()
+RedisClientFactory.setup_client(_config.redis_url)
+GithubAppFactory.setup_client(_config.github_app_id, _config.github_app_private_key, _config.github_api_timeout)
 
 _JSON_HEADERS = {"content-type": "application/json"}
 
