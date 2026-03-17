@@ -1,4 +1,4 @@
-SHARED := config.py utils.py whitelist_redis_helper.py
+SHARED := config.py utils.py whitelist_redis_helper.py secrets_manager_helper.py
 PIP_FLAGS := --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.10
 
 prepare-webhook: clean-webhook

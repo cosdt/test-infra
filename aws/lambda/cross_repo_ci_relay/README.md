@@ -52,20 +52,13 @@ cross_repo_ci_result (Lambda Function URL)
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GITHUB_APP_ID` | GitHub App ID | `2847493` |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to PEM private key (set automatically from Secrets Manager) | `/tmp/github_app_private_key.pem` |
+| `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
 | `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `cosdt/UpStream` |
 | `WHITELIST_PATH` | Path to whitelist YAML | `whitelist.yaml` |
-| `REDIS_URL` | Redis connection URL (set from Secrets Manager) | `redis://:pass@host:6379/0` |
 | `WHITELIST_TTL_SECONDS` | Whitelist cache TTL in Redis (seconds) | `3600` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
-Secrets Manager ARN variables (Terraform sets these; the Lambda reads the actual secret at cold start):
-
-| ARN env var | Secret path | Value fetched |
-|-------------|-------------|---------------|
-| `GITHUB_APP_PRIVATE_KEY_SECRET_ARN` | `cross-repo-ci-relay/github-app-private-key` | PEM text |
-| `GITHUB_WEBHOOK_SECRET_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `webhook_secret` |
-| `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `redis_url` |
+The webhook Lambda does not read `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_PRIVATE_KEY`, or `REDIS_URL` from environment variables. Those values are loaded only from the Secrets Manager secret addressed by `SECRET_STORE_ARN`.
 
 ### `cross_repo_ci_result`
 
@@ -75,35 +68,33 @@ Secrets Manager ARN variables (Terraform sets these; the Lambda reads the actual
 | `CLICKHOUSE_URL` | ClickHouse HTTP endpoint | `http://111.119.217.84:8123` |
 | `CLICKHOUSE_USER` | ClickHouse username | `admin` |
 | `CLICKHOUSE_DATABASE` | ClickHouse database | `default` |
-| `CLICKHOUSE_PASSWORD` | ClickHouse password (set from Secrets Manager) | — |
-| `REDIS_URL` | Redis connection URL (set from Secrets Manager) | `redis://:pass@host:6379/0` |
+| `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
 | `WHITELIST_TTL_SECONDS` | Whitelist cache TTL in Redis (seconds) | `3600` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 
-| ARN env var | Secret path | Value fetched |
-|-------------|-------------|---------------|
-| `CLICKHOUSE_PASSWORD_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `clickhouse_password` |
-| `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `redis_url` |
+The result Lambda does not read `CLICKHOUSE_PASSWORD` or `REDIS_URL` from environment variables. Those values are loaded only from the Secrets Manager secret addressed by `SECRET_STORE_ARN`.
 
 For local development, create a `.env` file — `config.py` loads it automatically via `python-dotenv`.
 
 ## Secrets Manager Setup
 
-Create two secrets in `us-east-1` before the first deploy:
+Create one secret in the same region referenced by `SECRET_STORE_ARN` before the first deploy:
 
 ```bash
-# GitHub App private key (PEM text)
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/github-app-private-key \
-  --secret-string "$(cat your_private_key.pem)" \
-  --region us-east-1
-
-# JSON bundle for all other sensitive values
 aws secretsmanager create-secret \
   --name cross-repo-ci-relay/app-secrets \
-  --secret-string '{"webhook_secret":"...","clickhouse_password":"...","redis_url":"redis://:pass@host:6379/0"}' \
-  --region us-east-1
+  --secret-string '{"GITHUB_WEBHOOK_SECRET":"...","GITHUB_APP_PRIVATE_KEY":"<base64-pem>","CLICKHOUSE_PASSWORD":"...","REDIS_URL":"redis://:pass@host:6379/0"}' \
+  --region <secret-region>
 ```
+
+The secret value should be a JSON object. `GITHUB_APP_PRIVATE_KEY` may be stored either as raw PEM text or as base64-encoded PEM; base64 is preferred and matches the `pytorch-auto-revert` pattern.
+
+Required keys in that JSON are:
+
+- `GITHUB_WEBHOOK_SECRET`
+- `GITHUB_APP_PRIVATE_KEY`
+- `CLICKHOUSE_PASSWORD`
+- `REDIS_URL`
 
 ## Whitelist Configuration
 
@@ -227,7 +218,7 @@ For local development, create a `.env` file in the project directory.
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GITHUB_APP_ID` | GitHub App ID | `2847493` |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to the GitHub App private key PEM file | `/tmp/github_app_private_key.pem` |
+| `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
 | `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `cosdt/UpStream` |
 | `WHITELIST_PATH` | Path to the whitelist YAML file | `whitelist.yaml` |
 | `CLICKHOUSE_URL` | ClickHouse HTTP endpoint | `http://111.119.217.84:8123` |
@@ -238,29 +229,22 @@ For local development, create a `.env` file in the project directory.
 
 ### Sensitive Variables (Injected from Secrets Manager)
 
-At cold start, `lambda_function.py` automatically reads the following variables from Secrets Manager. If the corresponding `_SECRET_ARN` environment variable is set and the target variable is not already populated, it is filled in automatically.
+At cold start, `lambda_function.py` loads the JSON secret addressed by `SECRET_STORE_ARN`. Sensitive values are not read from regular environment variables.
 
-| Variable | Secret ARN env var | Secrets Manager path |
-|----------|--------------------|----------------------|
-| `GITHUB_WEBHOOK_SECRET` | `GITHUB_WEBHOOK_SECRET_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `webhook_secret`) |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | `GITHUB_APP_PRIVATE_KEY_SECRET_ARN` | `cross-repo-ci-relay/github-app-private-key` (PEM text) |
-| `CLICKHOUSE_PASSWORD` | `CLICKHOUSE_PASSWORD_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `clickhouse_password`) |
-| `REDIS_URL` | `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `redis_url`) |
+| Secret key | Meaning |
+|------------|---------|
+| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret |
+| `GITHUB_APP_PRIVATE_KEY` | GitHub App private key PEM text or base64-encoded PEM |
+| `CLICKHOUSE_PASSWORD` | ClickHouse password |
+| `REDIS_URL` | Redis connection URL |
 
-Two secrets must be created in Secrets Manager (`us-east-1`) before the first deploy:
+One secret must be created in Secrets Manager in the same region referenced by `SECRET_STORE_ARN` before the first deploy:
 
 ```bash
-# PEM private key
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/github-app-private-key \
-  --secret-string "$(cat your_private_key.pem)" \
-  --region us-east-1
-
-# JSON bundle for the remaining three sensitive values
 aws secretsmanager create-secret \
   --name cross-repo-ci-relay/app-secrets \
-  --secret-string '{"webhook_secret":"...","clickhouse_password":"...","redis_url":"redis://:pass@host:6379/0"}' \
-  --region us-east-1
+  --secret-string '{"GITHUB_WEBHOOK_SECRET":"...","GITHUB_APP_PRIVATE_KEY":"<base64-pem>","CLICKHOUSE_PASSWORD":"...","REDIS_URL":"redis://:pass@host:6379/0"}' \
+  --region <secret-region>
 ```
 
 ## Whitelist Configuration

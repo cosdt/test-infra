@@ -7,53 +7,17 @@ import json
 import logging
 import os
 
-import boto3
-
 import result_handler
 from config import RelayConfig
+from secrets_manager_helper import get_runtime_secrets
 from utils import RelayHTTPException
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
-
-_secrets_client = None
-
-
-def _get_secrets_client():
-    global _secrets_client
-    if _secrets_client is None:
-        _secrets_client = boto3.client("secretsmanager")
-    return _secrets_client
-
-
-def _fetch_secret_text(secret_arn: str) -> str:
-    client = _get_secrets_client()
-    resp = client.get_secret_value(SecretId=secret_arn)
-
-    if "SecretString" in resp and resp["SecretString"] is not None:
-        return resp["SecretString"]
-
-    secret_binary = resp.get("SecretBinary")
-    if not secret_binary:
-        raise RuntimeError("Secrets Manager response missing SecretString/SecretBinary")
-    return base64.b64decode(secret_binary).decode("utf-8")
-
-
-def _maybe_set_env_from_secret(*, env_key: str, secret_arn_env_key: str) -> None:
-    secret_arn = os.getenv(secret_arn_env_key)
-    if not secret_arn:
-        return
-    if os.getenv(env_key):
-        return
-    os.environ[env_key] = _fetch_secret_text(secret_arn)
-
-
-# One-time cold-start initialization.
-_maybe_set_env_from_secret(env_key="CLICKHOUSE_PASSWORD", secret_arn_env_key="CLICKHOUSE_PASSWORD_SECRET_ARN")
-_maybe_set_env_from_secret(env_key="REDIS_URL", secret_arn_env_key="REDIS_URL_SECRET_ARN")
-
-_config = RelayConfig.from_env()
+_bootstrap_config = RelayConfig.from_env()
+_runtime_secrets = get_runtime_secrets(_bootstrap_config.secret_store_arn)
+_config = RelayConfig.from_env(_runtime_secrets)
 
 _JSON_HEADERS = {"content-type": "application/json"}
 
