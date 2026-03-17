@@ -6,8 +6,6 @@ import base64
 import json
 import logging
 import os
-import stat
-from pathlib import Path
 
 import boto3
 
@@ -51,31 +49,10 @@ def _maybe_set_env_from_secret(*, env_key: str, secret_arn_env_key: str) -> None
     os.environ[env_key] = _fetch_secret_text(secret_arn)
 
 
-def _write_private_key_from_secrets_manager() -> None:
-    secret_arn = os.getenv("GITHUB_APP_PRIVATE_KEY_SECRET_ARN")
-    if not secret_arn:
-        return
-
-    private_key_path = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH") or "/tmp/github_app_private_key.pem"
-    path = Path(private_key_path)
-
-    if path.exists() and path.stat().st_size > 0:
-        os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(path)
-        return
-
-    secret_text = _fetch_secret_text(secret_arn)
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(secret_text, encoding="utf-8")
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-
-    os.environ["GITHUB_APP_PRIVATE_KEY_PATH"] = str(path)
-
-
 # One-time cold-start initialization.
 _maybe_set_env_from_secret(env_key="GITHUB_WEBHOOK_SECRET", secret_arn_env_key="GITHUB_WEBHOOK_SECRET_SECRET_ARN")
 _maybe_set_env_from_secret(env_key="REDIS_URL", secret_arn_env_key="REDIS_URL_SECRET_ARN")
-_write_private_key_from_secrets_manager()
+_maybe_set_env_from_secret(env_key="GITHUB_APP_PRIVATE_KEY", secret_arn_env_key="GITHUB_APP_PRIVATE_KEY_SECRET_ARN")
 
 _config = RelayConfig.from_env()
 

@@ -1,0 +1,63 @@
+name: PyTorch Downstream CI
+
+on:
+  repository_dispatch:
+    types: [pytorch-pr-trigger]
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        
+      - name: Report result to server
+        if: always()
+        run: |
+          curl --retry 3 --retry-delay 5 --retry-max-time 30 -X POST "${{ vars.CI_RESULT_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"workflow_name\": \"PyTorch Downstream CI\",
+              \"upstream_repo\": \"${{ github.event.client_payload.upstream_repo }}\",
+              \"commit_sha\": \"${{ github.event.client_payload.commit_sha }}\",
+              \"status\": \"in_progress\",
+              \"conclusion\": \"neutral\",
+              \"url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"
+
+      - name: Run CI
+        run: |
+          echo "Running downstream workflow 0..."
+          sleep 1
+          echo "Done"
+
+      - name: Report result to server
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            RESULT=success
+          else
+            RESULT=failure
+          fi
+
+          curl --retry 3 --retry-delay 5 --retry-max-time 30 -X POST "${{ vars.CI_RESULT_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"workflow_name\": \"PyTorch Downstream CI 0\",
+              \"upstream_repo\": \"${{ github.event.client_payload.upstream_repo }}\",
+              \"commit_sha\": \"${{ github.event.client_payload.commit_sha }}\",
+              \"status\": \"completed\",
+              \"conclusion\": \"$RESULT\",
+              \"url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+            }"
