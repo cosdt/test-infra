@@ -2,8 +2,6 @@ import hmac
 import hashlib
 import logging
 
-from github import Auth, Github, GithubIntegration
-
 from config import RelayConfig
 
 logger = logging.getLogger(__name__)
@@ -73,8 +71,6 @@ def parse_allowlist_info_map(raw: dict) -> dict[str, dict]:
     return mapping
 
 
-_integration: GithubIntegration | None = None
-
 # ================= Core utilities =================
 
 
@@ -90,66 +86,6 @@ def verify_signature(config: RelayConfig, body: bytes, signature: str) -> None:
     if not hmac.compare_digest(expected, signature):
         logger.warning("webhook signature mismatch")
         raise RelayHTTPException(status_code=401, detail="Bad signature")
-
-
-def get_installation_token(config: RelayConfig, installation_id: int) -> str:
-    global _integration
-    if _integration is None:
-        private_key = config.github_app_private_key
-        if not private_key:
-            raise RuntimeError("GITHUB_APP_PRIVATE_KEY is not configured")
-        _integration = GithubIntegration(int(config.github_app_id), private_key)
-        logger.debug("GithubIntegration initialized app_id=%s", config.github_app_id)
-
-    token = _integration.get_access_token(int(installation_id)).token
-    logger.debug("installation token obtained installation_id=%s", installation_id)
-    return token
-
-
-def list_installation_repositories(
-    installation_token: str, max_results: int = 1000
-) -> list[dict]:
-    """List repositories accessible to a GitHub App installation token."""
-    repos = []
-    page = 1
-    per_page = 100
-    while True:
-        gh = Github(auth=Auth.Token(installation_token), timeout=20)
-        requester = gh._Github__requester
-        _resp_headers, data = requester.requestJsonAndCheck(
-            "GET",
-            "/installation/repositories",
-            parameters={"per_page": per_page, "page": page},
-            headers={
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-        chunk = (data or {}).get("repositories", [])
-        if not chunk:
-            break
-        # Keep only what we need (avoid passing huge objects around)
-        repos.extend(
-            {
-                "name": repo.get("name"),
-                "full_name": repo.get("full_name"),
-                "html_url": repo.get("html_url"),
-            }
-            for repo in chunk
-        )
-
-        total_count = (data or {}).get("total_count")
-        if (
-            isinstance(total_count, int)
-            and total_count >= 0
-            and len(repos) >= total_count
-        ):
-            break
-        if len(repos) >= max_results:
-            break
-        page += 1
-    logger.info("installation repositories listed count=%d", len(repos))
-    return repos
 
 
 def pick_repo_full_name_by_allowlist(repos, allow_url: str):

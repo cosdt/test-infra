@@ -11,22 +11,12 @@ check runs without storing any long-lived credentials.
 import json
 import logging
 
-import redis as redis_lib
-
 from config import RelayConfig
+from redis_client_helper import RedisClientFactory
 
 logger = logging.getLogger(__name__)
 
 _REDIS_KEY_PREFIX = "oot:pr_info"
-
-_redis_client: redis_lib.Redis | None = None
-
-
-def _get_redis(config: RelayConfig) -> redis_lib.Redis:
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis_lib.from_url(config.redis_url, decode_responses=True)
-    return _redis_client
 
 
 def _pr_key(upstream_repo: str, sha: str) -> str:
@@ -42,7 +32,7 @@ def cache_pr_info(
     labeled_devices: list[str],
 ) -> None:
     """Store PR metadata and current ciflow/oot label state; resets TTL on every call."""
-    r = _get_redis(config)
+    r = RedisClientFactory.get_client()
     key = _pr_key(upstream_repo, sha)
     value = json.dumps(
         {
@@ -63,7 +53,7 @@ def cache_pr_info(
 
 def get_pr_info(config: RelayConfig, upstream_repo: str, sha: str) -> dict | None:
     """Return PR info dict or None if not found / TTL expired."""
-    r = _get_redis(config)
+    r = RedisClientFactory.get_client()
     raw = r.get(_pr_key(upstream_repo, sha))
     if raw is None:
         return None
@@ -82,7 +72,7 @@ def add_labeled_device(
     a ciflow/oot/<device> label.  A missing key means the webhook dispatch event
     has not been seen yet (e.g. cold-start race) — callers should handle None gracefully.
     """
-    r = _get_redis(config)
+    r = RedisClientFactory.get_client()
     key = _pr_key(upstream_repo, sha)
     raw = r.get(key)
     if raw is None:

@@ -4,15 +4,13 @@ import re
 from github.GithubException import GithubException
 
 import checkrun_helper
-import github_client_helper
 import pr_redis_helper
 import whitelist_redis_helper
 from clickhouse_client_helper import CHCliFactory
 from config import RelayConfig
+from github_client_helper import GithubAppFactory
 from utils import (
     RelayHTTPException,
-    get_installation_token,
-    list_installation_repositories,
     pick_repo_full_name_by_allowlist,
     verify_signature,
 )
@@ -43,7 +41,7 @@ def _handle_pr_dispatch(
         "pull_request action=%s repo=%s sha=%.12s labels=%s", action, repo, sha, raw_labels
     )
 
-    repos = list_installation_repositories(installation_token)
+    repos = GithubAppFactory.list_installation_repositories(installation_token)
     allowlist_info_map = whitelist_redis_helper.load_allowlist_info_map(config)
     allowlist_map = {
         device: info.get("url", "")
@@ -116,12 +114,11 @@ def _handle_pr_dispatch(
             action,
         )
         try:
-            github_client_helper.create_repository_dispatch(
-                token=installation_token,
+            GithubAppFactory.create_repository_dispatch(
+                installation_token=installation_token,
                 repo_full_name=picked,
                 event_type="pytorch-pr-trigger",
                 client_payload={"upstream_repo": repo, "commit_sha": sha},
-                timeout=20,
             )
             dispatched.append({"downstream_device": downstream_device, "repo": picked})
             logger.info(
@@ -239,7 +236,7 @@ def _handle_pr_labeled(
         )
         return {"ok": True, "action": "label_cached", "check_runs_created": 0}
 
-    installation_token = get_installation_token(config, installation_id)
+    installation_token = GithubAppFactory.get_installation_token(installation_id)
     created = 0
     updated = 0
 
@@ -253,7 +250,6 @@ def _handle_pr_labeled(
         if existing_cr_id > 0:
             # Check run was already created (e.g. label applied twice); update to current state.
             checkrun_helper.update_check_run(
-                config=config,
                 installation_token=installation_token,
                 upstream_repo=repo,
                 upstream_check_run_id=existing_cr_id,
@@ -266,7 +262,6 @@ def _handle_pr_labeled(
             updated += 1
         else:
             cr_id = checkrun_helper.create_check_run(
-                config=config,
                 installation_token=installation_token,
                 upstream_repo=repo,
                 sha=sha,
@@ -329,7 +324,7 @@ def handle_github_webhook(
         return {"ignored": True}
 
     if action in ("opened", "reopened", "synchronize"):
-        installation_token = get_installation_token(config, int(installation_id))
+        installation_token = GithubAppFactory.get_installation_token(int(installation_id))
         return _handle_pr_dispatch(
             config, payload, installation_token, int(installation_id), repo, sha, action
         )

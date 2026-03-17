@@ -9,9 +9,7 @@ clients are kept because tokens expire after 1 hour.
 
 import logging
 
-from github import Auth, Github
-
-from config import RelayConfig
+from github_client_helper import GithubAppFactory
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +21,6 @@ def check_run_name(device: str, workflow_name: str) -> str:
 
 def create_check_run(
     *,
-    config: RelayConfig,
     installation_token: str,
     upstream_repo: str,
     sha: str,
@@ -47,8 +44,7 @@ def create_check_run(
     Returns:
         The integer check run ID assigned by GitHub.
     """
-    gh = Github(auth=Auth.Token(installation_token), timeout=config.github_api_timeout)
-    repo = gh.get_repo(upstream_repo)
+    repo = GithubAppFactory.get_repo_client(installation_token).get_repo(upstream_repo)
     name = check_run_name(device, workflow_name)
 
     kwargs: dict = dict(
@@ -75,7 +71,6 @@ def create_check_run(
 
 def update_check_run(
     *,
-    config: RelayConfig,
     installation_token: str,
     upstream_repo: str,
     upstream_check_run_id: int,
@@ -87,8 +82,7 @@ def update_check_run(
     summary: str = "",
 ) -> None:
     """Update an existing check run identified by upstream_check_run_id."""
-    gh = Github(auth=Auth.Token(installation_token), timeout=config.github_api_timeout)
-    repo = gh.get_repo(upstream_repo)
+    repo = GithubAppFactory.get_repo_client(installation_token).get_repo(upstream_repo)
     name = check_run_name(device, workflow_name)
 
     cr = repo.get_check_run(upstream_check_run_id)
