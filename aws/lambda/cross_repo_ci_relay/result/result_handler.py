@@ -2,9 +2,11 @@ import logging
 import re
 
 from config import RelayConfig
-from utils import RelayHTTPException
+from utils import RelayHTTPException, get_installation_token
 from clickhouse_client_helper import CHCliFactory
 import whitelist_redis_helper
+import pr_redis_helper
+import checkrun_helper
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +66,107 @@ def handle_ci_result(config: RelayConfig, data: dict):
         commit_sha = data["commit_sha"]
         conclusion = data["conclusion"]
     except KeyError as e:
-        raise RelayHTTPException(status_code=400, detail=f"Missing required field: {e}") from e
+        raise RelayHTTPException(
+            status_code=400, detail=f"Missing required field: {e}"
+        ) from e
 
     status = data.get("status", "")
+    summary = data.get("summary", "")
 
     logger.info(
-        "ci/result device=%s level=%s conclusion=%s workflow=%s sha=%.12s",
-        device, level, conclusion, workflow_name, commit_sha,
+        "ci/result device=%s level=%s status=%s conclusion=%s workflow=%s sha=%.12s",
+        device,
+        level,
+        status,
+        conclusion,
+        workflow_name,
+        commit_sha,
     )
 
     if level == "L1":
         return {"ok": True, "action": "ignored"}
 
+    # --- Determine upstream check run action (L3 / L4 only) ---
+    # This must happen before the ClickHouse write so we can persist the
+    # upstream_check_run_id in the same row.
+    upstream_check_run_id = 0
+    cr_action = "hud_only"
+
+    if level in ("L3", "L4"):
+        pr_info = pr_redis_helper.get_pr_info(config, upstream_repo, commit_sha)
+        if pr_info is None:
+            logger.warning(
+                "pr_info missing in Redis repo=%s sha=%.12s device=%s; check run skipped",
+                upstream_repo,
+                commit_sha,
+                device,
+            )
+        else:
+            # L4 always acts; L3 only when the ciflow/oot/<device> label is present.
+            should_act = (level == "L4") or (
+                device in pr_info.get("labeled_devices", [])
+            )
+            if should_act:
+                installation_id = pr_info["installation_id"]
+                installation_token = get_installation_token(
+                    config, int(installation_id)
+                )
+
+                if status == "completed":
+                    # Call 2: try to update the check run created during Call 1.
+                    existing_cr_id = CHCliFactory.get_upstream_check_run_id(
+                        upstream_repo, commit_sha, device, workflow_name
+                    )
+                    # If upstream already has a check run for this
+                    # sha/device/workflow in in_progress state, update it to completed
+                    if existing_cr_id > 0:
+                        checkrun_helper.update_check_run(
+                            config=config,
+                            installation_token=installation_token,
+                            upstream_repo=upstream_repo,
+                            upstream_check_run_id=existing_cr_id,
+                            device=device,
+                            workflow_name=workflow_name,
+                            status=status,
+                            conclusion=conclusion,
+                            run_url=run_url,
+                            summary=summary,
+                        )
+                        upstream_check_run_id = existing_cr_id
+                        cr_action = "check_run_updated"
+                    else:
+                        # Label was added after Call 1 (or Call 1 had no label yet);
+                        # create a completed check run directly.
+                        upstream_check_run_id = checkrun_helper.create_check_run(
+                            config=config,
+                            installation_token=installation_token,
+                            upstream_repo=upstream_repo,
+                            sha=commit_sha,
+                            device=device,
+                            workflow_name=workflow_name,
+                            status=status,
+                            conclusion=conclusion,
+                            run_url=run_url,
+                            summary=summary,
+                        )
+                        cr_action = "check_run_created"
+                else:
+                    # Call 1 (in_progress): always create a fresh check run.
+                    upstream_check_run_id = checkrun_helper.create_check_run(
+                        config=config,
+                        installation_token=installation_token,
+                        upstream_repo=upstream_repo,
+                        sha=commit_sha,
+                        device=device,
+                        workflow_name=workflow_name,
+                        status=status,
+                        conclusion=conclusion,
+                        run_url=run_url,
+                        summary=summary,
+                    )
+                    cr_action = "check_run_created"
+
+    # --- Persist to ClickHouse (all L2+) ---
     CHCliFactory.ensure_table()
     CHCliFactory.write_ci_result(
         device=device,
@@ -85,10 +176,12 @@ def handle_ci_result(config: RelayConfig, data: dict):
         status=status,
         conclusion=conclusion,
         run_url=run_url,
+        upstream_check_run_id=upstream_check_run_id,
     )
-    logger.info("ci/result written to ClickHouse device=%s", device)
+    logger.info(
+        "ci/result written to ClickHouse device=%s upstream_check_run_id=%s",
+        device,
+        upstream_check_run_id,
+    )
 
-    if level == "L2":
-        return {"ok": True, "action": "hud_only"}
-
-    return {"ok": True, "action": "recorded"}
+    return {"ok": True, "action": cr_action}

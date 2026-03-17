@@ -95,17 +95,9 @@ def verify_signature(config: RelayConfig, body: bytes, signature: str) -> None:
 def get_installation_token(config: RelayConfig, installation_id: int) -> str:
     global _integration
     if _integration is None:
-        try:
-            with open(config.github_app_private_key_path, "r", encoding="utf-8") as f:
-                private_key = f.read()
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                f"GitHub App private key not found: {config.github_app_private_key_path}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to read GitHub App private key: {e}"
-            ) from e
+        private_key = config.github_app_private_key
+        if not private_key:
+            raise RuntimeError("GITHUB_APP_PRIVATE_KEY is not configured")
         _integration = GithubIntegration(int(config.github_app_id), private_key)
         logger.debug("GithubIntegration initialized app_id=%s", config.github_app_id)
 

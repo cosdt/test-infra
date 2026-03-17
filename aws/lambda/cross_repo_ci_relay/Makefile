@@ -1,4 +1,4 @@
-SHARED := config.py utils.py whitelist_redis_helper.py
+SHARED := config.py utils.py whitelist_redis_helper.py pr_redis_helper.py checkrun_helper.py clickhouse_client_helper.py
 PIP_FLAGS := --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.10
 
 prepare-webhook: clean-webhook
@@ -11,7 +11,7 @@ prepare-webhook: clean-webhook
 prepare-result: clean-result
 	mkdir -p ./result/deployment
 	cp $(SHARED) result/deployment/
-	cp result/lambda_function.py result/result_handler.py result/clickhouse_client_helper.py result/deployment/
+	cp result/lambda_function.py result/result_handler.py result/deployment/
 	pip3 install --target ./result/deployment -r result/requirements.txt $(PIP_FLAGS)
 	cd result/deployment && zip -r ../deployment.zip .
 

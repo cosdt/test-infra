@@ -52,6 +52,7 @@ def _maybe_set_env_from_secret(*, env_key: str, secret_arn_env_key: str) -> None
 # One-time cold-start initialization.
 _maybe_set_env_from_secret(env_key="CLICKHOUSE_PASSWORD", secret_arn_env_key="CLICKHOUSE_PASSWORD_SECRET_ARN")
 _maybe_set_env_from_secret(env_key="REDIS_URL", secret_arn_env_key="REDIS_URL_SECRET_ARN")
+_maybe_set_env_from_secret(env_key="GITHUB_APP_PRIVATE_KEY", secret_arn_env_key="GITHUB_APP_PRIVATE_KEY_SECRET_ARN")
 
 _config = RelayConfig.from_env()
 

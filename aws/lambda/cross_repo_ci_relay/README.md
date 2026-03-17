@@ -1,370 +1,294 @@
 # cross_repo_ci_relay
 
-Two AWS Lambda functions that relay GitHub webhook events from the upstream repository (`cosdt/UpStream`) to downstream repositories, and write CI results to ClickHouse.
+Two AWS Lambda functions that work together:
 
-Splitting into two functions keeps webhook processing and result ingestion isolated, which simplifies log analysis and CloudWatch alarming.
+- `cross_repo_ci_webhook` receives `POST /github/webhook` from the upstream GitHub App and dispatches downstream workflows.
+- `cross_repo_ci_result` receives `POST /ci/result` from downstream workflows and writes CI results to ClickHouse.
+
+Splitting them keeps webhook processing and result ingestion isolated, which makes logs, alarms, and debugging much easier.
 
 ## Repository Layout
 
-```
+```text
 cross_repo_ci_relay/
-├── config.py                    # shared — RelayConfig dataclass
-├── utils.py                     # shared — signature verification, GitHub helpers, RelayHTTPException
-├── whitelist_redis_helper.py    # shared — Redis-backed whitelist cache
-├── whitelist.yaml               # shared — allowlisted downstream repos
+├── config.py
+├── utils.py
+├── whitelist_redis_helper.py
 ├── webhook/
-│   ├── lambda_function.py       # entrypoint: handles POST /github/webhook
-│   ├── webhook_handler.py       # relay logic: dispatch to downstream repos
-│   ├── github_client_helper.py  # GitHub API client wrapper
+│   ├── lambda_function.py
+│   ├── webhook_handler.py
+│   ├── github_client_helper.py
 │   └── requirements.txt
 ├── result/
-│   ├── lambda_function.py       # entrypoint: handles POST /ci/result
-│   ├── result_handler.py        # result ingestion logic → ClickHouse
+│   ├── lambda_function.py
+│   ├── result_handler.py
 │   ├── clickhouse_client_helper.py
 │   └── requirements.txt
 ├── Makefile
 └── README.md
 ```
 
-## Architecture
+## Request Flow
 
-```
+```text
 GitHub App Webhook
-       │  POST /github/webhook
-       ▼
-cross_repo_ci_webhook (Lambda Function URL)
-       │
-       └─► webhook_handler  →  workflow_dispatch to downstream repos
+       |
+       | POST /github/webhook
+       v
+cross_repo_ci_webhook
+       |
+       +--> verifies webhook signature
+       +--> loads whitelist from GitHub URL and Redis cache
+       +--> dispatches downstream workflows
 
 
-Downstream CI runner
-       │  POST /ci/result
-       ▼
-cross_repo_ci_result (Lambda Function URL)
-       │
-       └─► result_handler   →  write row to ClickHouse oot_ci_results
+Downstream workflow
+       |
+       | POST /ci/result
+       v
+cross_repo_ci_result
+       |
+       +--> loads whitelist from GitHub URL and Redis cache
+       +--> validates repo against allowlist
+       +--> writes row to ClickHouse
 ```
 
-## Environment Variables
+## What Must Be Configured In AWS
+
+You need four pieces in AWS:
+
+1. Secrets Manager secrets
+2. Two Lambda functions
+3. Lambda environment variables
+4. Two Lambda Function URLs
+
+Terraform in `ci-infra` creates the Lambda functions, IAM role, and Function URLs. The Lambda code now expects direct environment variables like `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and `REDIS_URL`.
+
+## Secrets Manager
+
+Create these secrets in `us-east-1` before the first deploy.
+
+All of them should be plain-text string secrets.
+
+```bash
+aws secretsmanager create-secret \
+  --name cross-repo-ci-relay/github-app-private-key \
+  --secret-string "$(cat your_private_key.pem)" \
+  --region us-east-1
+
+aws secretsmanager create-secret \
+  --name cross-repo-ci-relay/github-webhook-secret \
+  --secret-string 'your-webhook-secret' \
+  --region us-east-1
+
+aws secretsmanager create-secret \
+  --name cross-repo-ci-relay/redis-url \
+  --secret-string 'redis://:password@host:6379/0' \
+  --region us-east-1
+
+aws secretsmanager create-secret \
+  --name cross-repo-ci-relay/clickhouse-password \
+  --secret-string 'your-clickhouse-password' \
+  --region us-east-1
+```
+
+## Lambda Runtime Settings
+
+Both Lambda functions use:
+
+- Runtime: `python3.10`
+- Handler: `lambda_function.lambda_handler`
+- Timeout: `30`
+- Memory size: `512`
+
+## Lambda Environment Variables
 
 ### `cross_repo_ci_webhook`
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `GITHUB_APP_ID` | GitHub App ID | `2847493` |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to PEM private key (set automatically from Secrets Manager) | `/tmp/github_app_private_key.pem` |
-| `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `cosdt/UpStream` |
-| `WHITELIST_PATH` | Path to whitelist YAML | `whitelist.yaml` |
-| `REDIS_URL` | Redis connection URL (set from Secrets Manager) | `redis://:pass@host:6379/0` |
-| `WHITELIST_TTL_SECONDS` | Whitelist cache TTL in Redis (seconds) | `3600` |
-| `LOG_LEVEL` | Logging level | `INFO` |
+Configure these environment variables:
 
-Secrets Manager ARN variables (Terraform sets these; the Lambda reads the actual secret at cold start):
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `GITHUB_APP_ID` | yes | GitHub App ID |
+| `UPSTREAM_REPO` | yes | Upstream repo, for example `cosdt/UpStream` |
+| `WHITELIST_PATH` | yes | GitHub blob URL of `whitelist.yaml` |
+| `GITHUB_WEBHOOK_SECRET` | yes | GitHub App webhook secret |
+| `GITHUB_APP_PRIVATE_KEY` | yes | PEM contents of the GitHub App private key |
+| `REDIS_URL` | yes | Full Redis URL |
+| `WHITELIST_TTL_SECONDS` | optional | Default in code is `1200` |
+| `LOG_LEVEL` | optional | Usually `INFO` |
 
-| ARN env var | Secret path | Value fetched |
-|-------------|-------------|---------------|
-| `GITHUB_APP_PRIVATE_KEY_SECRET_ARN` | `cross-repo-ci-relay/github-app-private-key` | PEM text |
-| `GITHUB_WEBHOOK_SECRET_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `webhook_secret` |
-| `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `redis_url` |
+If you still want to keep the source of truth in Secrets Manager, inject the secret values into these environment variables from Terraform or the Lambda console. The runtime no longer reads `GITHUB_WEBHOOK_SECRET_SECRET_ARN`, `GITHUB_APP_PRIVATE_KEY_SECRET_ARN`, or `REDIS_URL_SECRET_ARN`.
 
 ### `cross_repo_ci_result`
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `WHITELIST_PATH` | Path to whitelist YAML | `whitelist.yaml` |
-| `CLICKHOUSE_URL` | ClickHouse HTTP endpoint | `http://111.119.217.84:8123` |
-| `CLICKHOUSE_USER` | ClickHouse username | `admin` |
-| `CLICKHOUSE_DATABASE` | ClickHouse database | `default` |
-| `CLICKHOUSE_PASSWORD` | ClickHouse password (set from Secrets Manager) | — |
-| `REDIS_URL` | Redis connection URL (set from Secrets Manager) | `redis://:pass@host:6379/0` |
-| `WHITELIST_TTL_SECONDS` | Whitelist cache TTL in Redis (seconds) | `3600` |
-| `LOG_LEVEL` | Logging level | `INFO` |
+Configure these environment variables:
 
-| ARN env var | Secret path | Value fetched |
-|-------------|-------------|---------------|
-| `CLICKHOUSE_PASSWORD_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `clickhouse_password` |
-| `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` | `redis_url` |
+| Variable | Required | Meaning |
+|----------|----------|---------|
+| `WHITELIST_PATH` | yes | Same whitelist URL as webhook Lambda |
+| `CLICKHOUSE_URL` | yes | Example: `http://host:8123` |
+| `CLICKHOUSE_USER` | yes | ClickHouse username |
+| `CLICKHOUSE_DATABASE` | yes | Usually `default` |
+| `GITHUB_APP_ID` | yes | GitHub App ID for check run updates |
+| `GITHUB_APP_PRIVATE_KEY` | yes | PEM contents of the GitHub App private key |
+| `UPSTREAM_REPO` | yes | Upstream repo name |
+| `REDIS_URL` | yes | Full Redis URL |
+| `CLICKHOUSE_PASSWORD_SECRET_ARN` | yes | ARN of `cross-repo-ci-relay/clickhouse-password` |
+| `WHITELIST_TTL_SECONDS` | optional | Default in code is `1200` |
+| `LOG_LEVEL` | optional | Usually `INFO` |
 
-For local development, create a `.env` file — `config.py` loads it automatically via `python-dotenv`.
+At cold start, this Lambda still supports `CLICKHOUSE_PASSWORD_SECRET_ARN` and will populate `CLICKHOUSE_PASSWORD` if needed.
 
-## Secrets Manager Setup
+## Function URL Configuration
 
-Create two secrets in `us-east-1` before the first deploy:
+Each Lambda needs a Function URL with auth type `NONE`.
 
-```bash
-# GitHub App private key (PEM text)
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/github-app-private-key \
-  --secret-string "$(cat your_private_key.pem)" \
-  --region us-east-1
+Expected paths are:
 
-# JSON bundle for all other sensitive values
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/app-secrets \
-  --secret-string '{"webhook_secret":"...","clickhouse_password":"...","redis_url":"redis://:pass@host:6379/0"}' \
-  --region us-east-1
+- webhook Lambda: `POST /github/webhook`
+- result Lambda: `POST /ci/result`
+
+If the Function URL auth type is `AWS_IAM`, public requests will fail with:
+
+```json
+{"Message":"Forbidden"}
 ```
 
-## Whitelist Configuration
+## Terraform
 
-`whitelist.yaml` defines the downstream repositories allowed to receive relayed events, grouped by priority tier:
+Infrastructure is managed in `ci-infra` here:
 
-```yaml
-L1:
-  - repo: cosdt/DownStream2
-    device: Device2
-    url: https://github.com/cosdt/DownStream2
-    oncall: []
-L2:
-  - repo: cosdt/DownStream1
-    device: Device1
-    url: https://github.com/cosdt/DownStream1
-    oncall: [fffrog]
-```
+`ali/aws/391835788720/us-east-1/cross_repo_ci_relay.tf`
 
-The whitelist is cached in Redis (TTL = `WHITELIST_TTL_SECONDS`). After updating `whitelist.yaml`, rebuild and redeploy both packages.
+That Terraform file currently:
 
-## Build and Deploy
+- creates the shared IAM role
+- grants `secretsmanager:GetSecretValue` for the remaining ClickHouse password bootstrap
+- creates `cross_repo_ci_webhook`
+- creates `cross_repo_ci_result`
+- creates public Function URLs for both functions
+- outputs both Function URLs
 
-### Make Targets
+## Build Packages
 
 ```bash
-# Build both zips
+cd /opt/test-infra/aws/lambda/cross_repo_ci_relay
 make prepare
-
-# Build only one
-make prepare-webhook
-make prepare-result
-
-# Deploy both (build + aws lambda update-function-code)
-make deploy
-
-# Deploy only one
-make deploy-webhook
-make deploy-result
-
-# Clean build artifacts
-make clean
 ```
 
-`make deploy-webhook` is equivalent to:
+This produces:
+
+- `webhook/deployment.zip`
+- `result/deployment.zip`
+
+You can also build them separately:
 
 ```bash
 make prepare-webhook
-aws lambda update-function-code --function-name cross_repo_ci_webhook --zip-file fileb://webhook/deployment.zip
+make prepare-result
 ```
 
-### First Deploy via ci-infra Terraform
-
-Infrastructure (IAM role, both Lambda functions, both Function URLs) is managed by Terraform in [ci-infra](https://github.com/cosdt/ci-infra) at `ali/aws/391835788720/us-east-1/cross_repo_ci_relay.tf`.
+## First Deploy With Terraform
 
 ```bash
-# 1. Build both zips in test-infra
-cd test-infra/aws/lambda/cross_repo_ci_relay
+cd /opt/test-infra/aws/lambda/cross_repo_ci_relay
 make prepare
 
-# 2. Copy zips to ci-infra assets directories
-cp webhook/deployment.zip <ci-infra>/ali/assets/cross_repo_ci_webhook/deployment.zip
-cp result/deployment.zip  <ci-infra>/ali/assets/cross_repo_ci_result/deployment.zip
+mkdir -p /opt/ci-infra/ali/assets/cross_repo_ci_webhook
+mkdir -p /opt/ci-infra/ali/assets/cross_repo_ci_result
 
-# 3. Apply Terraform in ci-infra
-cd <ci-infra>/ali/aws/391835788720/us-east-1
-terraform init   # required on first run
+cp webhook/deployment.zip /opt/ci-infra/ali/assets/cross_repo_ci_webhook/deployment.zip
+cp result/deployment.zip  /opt/ci-infra/ali/assets/cross_repo_ci_result/deployment.zip
+
+cd /opt/ci-infra/ali/aws/391835788720/us-east-1
+terraform init
 terraform plan
 terraform apply
 ```
 
-Terraform outputs two Function URLs after apply:
-- `cross_repo_ci_webhook_function_url` — use this for the GitHub App webhook
-- `cross_repo_ci_result_function_url` — use this for downstream CI result posting
+Terraform outputs:
 
-### Subsequent Code Updates
+- `cross_repo_ci_webhook_function_url`
+- `cross_repo_ci_result_function_url`
 
-For routine code changes, use `make deploy` directly — no Terraform needed:
+Use them as:
 
-```bash
-cd test-infra/aws/lambda/cross_repo_ci_relay
-make deploy-webhook   # or deploy-result, or just deploy
-```
+- GitHub App webhook URL: `<webhook_function_url>/github/webhook`
+- downstream result URL: `<result_function_url>/ci/result`
 
-If only one function changed, deploy only that one to save time.
+## Code Updates After First Deploy
 
-## GitHub App Configuration
-
-1. Go to the GitHub App settings (Settings → Developer settings → GitHub Apps)
-2. Set the Webhook URL to the `cross_repo_ci_webhook_function_url` output, appending the path:
-   ```
-   https://<webhook-function-url>/github/webhook
-   ```
-3. Set the Webhook Secret to the same value as `GITHUB_WEBHOOK_SECRET`
-4. Subscribe to events: **Pull requests**
-5. Install the App on the upstream repository (`cosdt/UpStream`)
-
-## Architecture
-
-```
-GitHub App Webhook
-       │  POST /github/webhook
-       ▼
- Lambda Function URL
-       │
-       ├─► webhook_handler  →  dispatch workflow_dispatch to downstream repos
-       └─► result_handler   →  write CI result to ClickHouse
-```
-
-Routes:
-- `POST /github/webhook` — receives GitHub App webhook events, verifies the signature, and relays `pull_request` events to whitelisted downstream repositories
-- `POST /ci/result` — receives CI results from downstream and writes them to ClickHouse
-
-## Environment Variables
-
-All configuration is injected via environment variables. Non-sensitive variables are set directly in Terraform; sensitive variables are injected from AWS Secrets Manager at cold start (see below).
-
-For local development, create a `.env` file in the project directory.
-
-### Non-sensitive Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `GITHUB_APP_ID` | GitHub App ID | `2847493` |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to the GitHub App private key PEM file | `/tmp/github_app_private_key.pem` |
-| `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `cosdt/UpStream` |
-| `WHITELIST_PATH` | Path to the whitelist YAML file | `whitelist.yaml` |
-| `CLICKHOUSE_URL` | ClickHouse HTTP endpoint | `http://111.119.217.84:8123` |
-| `CLICKHOUSE_USER` | ClickHouse username | `admin` |
-| `CLICKHOUSE_DATABASE` | ClickHouse database | `default` |
-| `WHITELIST_TTL_SECONDS` | TTL for whitelist cache in Redis (seconds) | `3600` |
-| `LOG_LEVEL` | Logging level | `INFO` |
-
-### Sensitive Variables (Injected from Secrets Manager)
-
-At cold start, `lambda_function.py` automatically reads the following variables from Secrets Manager. If the corresponding `_SECRET_ARN` environment variable is set and the target variable is not already populated, it is filled in automatically.
-
-| Variable | Secret ARN env var | Secrets Manager path |
-|----------|--------------------|----------------------|
-| `GITHUB_WEBHOOK_SECRET` | `GITHUB_WEBHOOK_SECRET_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `webhook_secret`) |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | `GITHUB_APP_PRIVATE_KEY_SECRET_ARN` | `cross-repo-ci-relay/github-app-private-key` (PEM text) |
-| `CLICKHOUSE_PASSWORD` | `CLICKHOUSE_PASSWORD_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `clickhouse_password`) |
-| `REDIS_URL` | `REDIS_URL_SECRET_ARN` | `cross-repo-ci-relay/app-secrets` (key: `redis_url`) |
-
-Two secrets must be created in Secrets Manager (`us-east-1`) before the first deploy:
+For code-only updates, you can push zip updates directly with AWS CLI:
 
 ```bash
-# PEM private key
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/github-app-private-key \
-  --secret-string "$(cat your_private_key.pem)" \
-  --region us-east-1
-
-# JSON bundle for the remaining three sensitive values
-aws secretsmanager create-secret \
-  --name cross-repo-ci-relay/app-secrets \
-  --secret-string '{"webhook_secret":"...","clickhouse_password":"...","redis_url":"redis://:pass@host:6379/0"}' \
-  --region us-east-1
+cd /opt/test-infra/aws/lambda/cross_repo_ci_relay
+make deploy-webhook
+make deploy-result
 ```
 
-## Whitelist Configuration
+Or both:
 
-`whitelist.yaml` defines the downstream repositories that are allowed to receive relayed events, grouped by priority tier:
-
-```yaml
-L1:
-  - repo: cosdt/DownStream2
-    device: Device2
-    url: https://github.com/cosdt/DownStream2
-    oncall: []
-L2:
-  - repo: cosdt/DownStream1
-    device: Device1
-    url: https://github.com/cosdt/DownStream1
-    oncall: [fffrog]
+```bash
+make deploy
 ```
 
-The whitelist is cached in Redis with a TTL controlled by `WHITELIST_TTL_SECONDS`. After updating `whitelist.yaml`, rebuild and redeploy the package.
+## GitHub App Setup
+
+Configure the GitHub App with:
+
+1. Webhook URL: `<cross_repo_ci_webhook_function_url>/github/webhook`
+2. Webhook secret: the same value stored in `cross-repo-ci-relay/github-webhook-secret`
+3. Event subscription: `Pull requests`
+4. Install the App on the upstream repository
+
+## Downstream Workflow Setup
+
+Downstream workflows should post to:
+
+```text
+<cross_repo_ci_result_function_url>/ci/result
+```
+
+Recommended payload:
+
+```json
+{
+  "url": "https://github.com/<owner>/<repo>/actions/runs/123456",
+  "workflow_name": "test-ci",
+  "upstream_repo": "cosdt/UpStream",
+  "commit_sha": "abcdef123456",
+  "status": "completed",
+  "conclusion": "success"
+}
+```
+
+## Whitelist
+
+The relay does not read a bundled local `whitelist.yaml`. It reads the whitelist from `WHITELIST_PATH`, which should be a GitHub blob URL, and caches the contents in Redis.
+
+Example:
+
+```text
+https://github.com/cosdt/UpStream/blob/main/whitelist.yaml
+```
+
+When the whitelist changes, Lambda picks it up after the Redis TTL expires, or immediately after deleting the Redis cache key:
+
+```bash
+redis-cli -h <host> -a <password> DEL oot:whitelist_yaml
+```
 
 ## Local Development
 
-```bash
-# Install dependencies
-pip3 install -r requirements.txt
+For local testing, put values into `.env`. `config.py` loads it automatically.
 
-# Create a .env file with the variables listed above
-# Then invoke the handler directly
-python3 -c "
-import json, lambda_function
-event = {
-  'requestContext': {'http': {'method': 'POST', 'path': '/github/webhook'}},
-  'headers': {'x-github-event': 'ping', 'x-hub-signature-256': ''},
-  'body': json.dumps({'zen': 'test'}),
-  'isBase64Encoded': False
-}
-print(lambda_function.lambda_handler(event, None))
-"
-```
+See `.env.example` for the expected keys.
 
-## Build and Deploy
+## Common Failure Cases
 
-### Make Targets
-
-```bash
-# Install dependencies and produce deployment.zip
-make prepare
-
-# Build and update the Lambda function code directly (requires AWS CLI)
-make deploy
-
-# Remove build artifacts
-make clean
-```
-
-`make deploy` is equivalent to:
-
-```bash
-make prepare
-aws lambda update-function-code --function-name cross_repo_ci_relay --zip-file fileb://deployment.zip
-```
-
-### First Deploy via ci-infra Terraform
-
-The Lambda function and its supporting infrastructure (IAM role, Function URL) are managed by Terraform in the [ci-infra](https://github.com/cosdt/ci-infra) repository at `ali/aws/391835788720/us-east-1/cross_repo_ci_relay.tf`.
-
-```bash
-# 1. Build the zip in test-infra
-cd test-infra/aws/lambda/cross_repo_ci_relay
-make prepare
-
-# 2. Copy the zip to the ci-infra assets directory
-cp deployment.zip <ci-infra>/ali/assets/cross_repo_ci_relay/deployment.zip
-
-# 3. Apply Terraform in ci-infra
-cd <ci-infra>/ali/aws/391835788720/us-east-1
-terraform init   # required on first run
-terraform plan
-terraform apply
-```
-
-The Terraform configuration:
-- Creates an IAM role with `AWSLambdaBasicExecutionRole` and Secrets Manager read access
-- Creates the Lambda function (`python3.10`, handler `lambda_function.lambda_handler`)
-- Creates a Lambda Function URL (public, no API Gateway required)
-- Outputs the Function URL to use when configuring the GitHub App webhook
-
-### Subsequent Code Updates
-
-For routine code changes, use `make deploy` directly — no Terraform needed:
-
-```bash
-cd test-infra/aws/lambda/cross_repo_ci_relay
-make deploy
-```
-
-## GitHub App Configuration
-
-1. Go to the GitHub App settings page (Settings → Developer settings → GitHub Apps)
-2. Set the Webhook URL to the Function URL output by Terraform, appending the path:
-   ```
-   https://<function-url>/github/webhook
-   ```
-3. Set the Webhook Secret to the same value as `GITHUB_WEBHOOK_SECRET`
-4. Subscribe to events: **Pull requests**
-5. Install the App on the upstream repository (`cosdt/UpStream`)
+- `{"Message":"Forbidden"}`: Function URL auth type is `AWS_IAM` instead of `NONE`
+- `{"detail":"Not found"}` on `/ci/result`: the wrong zip was deployed to that function
+- `Secrets Manager response missing SecretString/SecretBinary`: the secret exists but does not contain a valid string value
+- ClickHouse connection error: `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, or `CLICKHOUSE_PASSWORD` is wrong
+- allowlist 403: the downstream repo URL is not present in the current whitelist
