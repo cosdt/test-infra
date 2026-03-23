@@ -2,15 +2,20 @@ name: cross-repo-ci-relay lambda
 
 on:
   pull_request:
+    branches:
+      - l1l2-cjh
+      - main
     paths:
       - .github/workflows/cross-repo-ci-relay-lambda.yml
       - aws/lambda/cross_repo_ci_relay/**
   push:
     branches:
       - main
+      - package-workflow
     paths:
       - .github/workflows/cross-repo-ci-relay-lambda.yml
       - aws/lambda/cross_repo_ci_relay/**
+workflow_dispatch:  # Allow manual trigger from the Actions tab in GitHub UI
 
 defaults:
   run:
