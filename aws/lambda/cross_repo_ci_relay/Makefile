@@ -17,7 +17,7 @@ prepare-result: clean-result
 
 prepare: prepare-webhook prepare-result
 
-development.zip: prepare
+deployment.zip: prepare
 
 deploy-webhook: prepare-webhook
 	aws lambda update-function-code --function-name cross_repo_ci_webhook --zip-file fileb://webhook/deployment.zip
