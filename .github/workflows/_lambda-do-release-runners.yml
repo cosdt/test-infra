@@ -93,8 +93,6 @@ jobs:
           { dir-name: 'keep-going-call-log-classifier', zip-name: 'keep-going-call-log-classifier' },
           { dir-name: 'buildkite-webhook-handler', zip-name: 'buildkite-webhook-handler' },
           { dir-name: 'benchmark_regression_summary_report', zip-name: 'benchmark-regression-summary-report' },
-          # cross_repo_ci_relay produces two separate zips (webhook + result) from sub-directories,
-          # so make-target and zip-source override the default 'deployment.zip' targets below.
           { dir-name: 'cross_repo_ci_relay', zip-name: 'cross-repo-ci-webhook', zip-source: 'webhook/deployment.zip' },
           { dir-name: 'cross_repo_ci_relay', zip-name: 'cross-repo-ci-result', zip-source: 'result/deployment.zip'  },
         ]
