@@ -35,7 +35,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "tag_name=v${{ steps.date.outputs.date }}" >> "${GITHUB_OUTPUT}"
           else
-            echo "tag_name=v${{ steps.date.outputs.date }}-custom" >> "${GITHUB_OUTPUT}"
+            echo "tag_name=v20260323-071015-custom" >> "${GITHUB_OUTPUT}"
           fi
 
       # - uses: actions/create-github-app-token@v2
