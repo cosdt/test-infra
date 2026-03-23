@@ -15,7 +15,8 @@ on:
     paths:
       - .github/workflows/cross-repo-ci-relay-lambda.yml
       - aws/lambda/cross_repo_ci_relay/**
-workflow_dispatch:  # Allow manual trigger from the Actions tab in GitHub UI
+  # Allow manual trigger from the Actions tab in GitHub UI
+  workflow_dispatch:  
 
 defaults:
   run:
