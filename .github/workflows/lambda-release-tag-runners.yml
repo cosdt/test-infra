@@ -54,7 +54,11 @@ jobs:
 
       - name: Write tag to summary
         run: |
-          echo "Release tag: ${{ steps.tag.outputs.tag_name }}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Release tag: v20260323-071015-custom" >> "${GITHUB_STEP_SUMMARY}"
+
+      # - name: Write tag to summary
+      #   run: |
+      #     echo "Release tag: ${{ steps.tag.outputs.tag_name }}" >> "${GITHUB_STEP_SUMMARY}"
 
   call-release:
     permissions:
