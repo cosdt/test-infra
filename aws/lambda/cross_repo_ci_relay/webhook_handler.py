@@ -8,7 +8,7 @@ from github.GithubException import GithubException
 import github_client_helper
 import redis_helper
 from config import RelayConfig
-from utils import RelayHTTPException
+from utils import PRDispatchPayload, RelayHTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +42,18 @@ def _dispatch_to_allowlist(
     installation_token: str,
     allowlist_map: dict[str, str],
     event_type: str,
-    client_payload: dict,
+    client_payload: PRDispatchPayload,
     sha: str,
     action: str,
 ) -> tuple[list[dict], list[dict]]:
     dispatched: list[dict] = []
     failed: list[dict] = []
 
-    for downstream_device, downstream_repo in sorted(allowlist_map.items()):
+    for downstream_label, downstream_repo in sorted(allowlist_map.items()):
         logger.info(
-            "dispatching %s device=%s repo=%s sha=%.12s action=%s",
+            "dispatching %s target=%s repo=%s sha=%.12s action=%s",
             event_type,
-            downstream_device,
+            downstream_label,
             downstream_repo,
             sha,
             action,
@@ -66,40 +66,40 @@ def _dispatch_to_allowlist(
                 client_payload=client_payload,
                 timeout=20,
             )
-            dispatched.append({"downstream_device": downstream_device, "repo": downstream_repo})
+            dispatched.append({"target": downstream_label, "repo": downstream_repo})
             logger.info(
-                "dispatch succeeded event_type=%s device=%s repo=%s",
+                "dispatch succeeded event_type=%s target=%s repo=%s",
                 event_type,
-                downstream_device,
+                downstream_label,
                 downstream_repo,
             )
         except GithubException as e:
             logger.error(
-                "dispatch failed event_type=%s device=%s repo=%s status=%s data=%s",
+                "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
                 event_type,
-                downstream_device,
+                downstream_label,
                 downstream_repo,
                 getattr(e, "status", None),
                 getattr(e, "data", None),
             )
             failed.append(
                 {
-                    "downstream_device": downstream_device,
+                    "target": downstream_label,
                     "repo": downstream_repo,
                     "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
                 }
             )
         except Exception as e:
             logger.error(
-                "dispatch failed event_type=%s device=%s repo=%s error=%s",
+                "dispatch failed event_type=%s target=%s repo=%s error=%s",
                 event_type,
-                downstream_device,
+                downstream_label,
                 downstream_repo,
                 e,
             )
             failed.append(
                 {
-                    "downstream_device": downstream_device,
+                    "target": downstream_label,
                     "repo": downstream_repo,
                     "error": f"GitHub dispatch failed: {e}",
                 }
@@ -119,13 +119,15 @@ def handle_github_webhook(
         raise RelayHTTPException(status_code=400, detail="No signature")
     verify_signature(config, body, signature)
 
-    # Only pull_request events are consumed by this relay.
     if event != "pull_request":
         logger.debug("event=%s ignored", event)
         return {"ignored": True}
 
     repo = payload["repository"]["full_name"]
     sha = payload["pull_request"]["head"]["sha"]
+    pr_number = payload["pull_request"]["number"]
+    head_ref = payload["pull_request"]["head"]["ref"]
+    base_ref = payload["pull_request"]["base"]["ref"]
     installation_id = payload["installation"]["id"]
     action = payload["action"]
 
@@ -137,70 +139,11 @@ def handle_github_webhook(
 
     allowlist_info_map = redis_helper.load_allowlist_info_map(config)
     allowlist_map = {
-        device: info["repo"]
-        for device, info in allowlist_info_map.items()
+        repo: info["repo"]
+        for repo, info in allowlist_info_map.items()
     }
     if not allowlist_map:
         raise RelayHTTPException(status_code=400, detail="allowlist is empty")
-
-    if action == "closed":
-        in_progress = redis_helper.pop_in_progress_workflows(
-            config,
-            upstream_repo=repo,
-            commit_sha=sha,
-        )
-        cancelled: list[dict] = []
-        failed_cancel: list[dict] = []
-        running_repos: set[str] = set()
-
-        for wf in in_progress:
-            downstream_repo = (wf.get("downstream_repo") or "").strip()
-            run_id = wf.get("run_id")
-            run_url = (wf.get("run_url") or "").strip()
-            if not downstream_repo or not isinstance(run_id, int):
-                continue
-            running_repos.add(downstream_repo)
-            try:
-                github_client_helper.cancel_workflow_run(
-                    token=installation_token,
-                    repo_full_name=downstream_repo,
-                    run_id=run_id,
-                    timeout=20,
-                )
-                redis_helper.register_cancelled_workflow(config, run_url=run_url)
-                cancelled.append({"repo": downstream_repo, "run_id": run_id})
-            except GithubException as e:
-                failed_cancel.append(
-                    {
-                        "repo": downstream_repo,
-                        "run_id": run_id,
-                        "error": f"GitHub cancel failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
-                    }
-                )
-            except Exception as e:
-                failed_cancel.append(
-                    {"repo": downstream_repo, "run_id": run_id, "error": f"GitHub cancel failed: {e}"}
-                )
-
-        marked_pending: list[dict] = []
-        for downstream_repo in sorted(set(allowlist_map.values())):
-            if downstream_repo in running_repos:
-                continue
-            redis_helper.register_pending_pr_close(
-                config,
-                upstream_repo=repo,
-                commit_sha=sha,
-                downstream_repo=downstream_repo,
-            )
-            marked_pending.append({"repo": downstream_repo})
-
-        return {
-            "ok": True,
-            "action": "closed",
-            "cancelled": cancelled,
-            "failed_cancel": failed_cancel,
-            "marked_pending": marked_pending,
-        }
 
     if action not in ("opened", "reopened", "synchronize"):
         logger.debug("pull_request action=%s ignored", action)
@@ -210,7 +153,13 @@ def handle_github_webhook(
         installation_token=installation_token,
         allowlist_map=allowlist_map,
         event_type="pytorch-pr-trigger",
-        client_payload={"upstream_repo": repo, "commit_sha": sha},
+        client_payload={
+            "upstream_repo": repo,
+            "head_sha": sha,
+            "pr_number": pr_number,
+            "head_ref": head_ref,
+            "base_ref": base_ref,
+        },
         sha=sha,
         action=action,
     )

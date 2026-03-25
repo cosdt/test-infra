@@ -1,6 +1,7 @@
 import logging
 
 import github
+from utils import PRDispatchPayload
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ def create_repository_dispatch(
     token: str,
     repo_full_name: str,
     event_type: str,
-    client_payload: dict,
+    client_payload: PRDispatchPayload,
     timeout: int = 20,
 ) -> None:
     gh = _get_client(token, timeout)
