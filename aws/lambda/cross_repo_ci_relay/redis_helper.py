@@ -1,64 +1,16 @@
-"""Redis-backed helpers for webhook Lambda allowlist caching."""
+"""Helpers for loading the whitelist directly from GitHub."""
 
 import logging
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from github import Github
 from github.GithubException import GithubException
-import redis as redis_lib
 import yaml
 
 from config import RelayConfig
 from utils import parse_allowlist_info_map
 
 logger = logging.getLogger(__name__)
-
-WHITELIST_REDIS_KEY = "oot:whitelist_yaml"
-
-_redis_client: redis_lib.Redis | None = None
-
-
-def _split_endpoint_host_port(endpoint: str) -> tuple[str, int]:
-    host = endpoint.strip()
-    port = 6379
-
-    if host.startswith(("redis://", "rediss://")):
-        raise RuntimeError(
-            "REDIS_ENDPOINT must be an AWS ElastiCache endpoint hostname or host:port, not a redis URL"
-        )
-
-    if "/" in host:
-        raise RuntimeError(
-            "REDIS_ENDPOINT must be an AWS ElastiCache endpoint hostname or host:port"
-        )
-
-    if ":" in host:
-        maybe_host, maybe_port = host.rsplit(":", 1)
-        if maybe_port.isdigit():
-            host = maybe_host
-            port = int(maybe_port)
-
-    if not host:
-        raise RuntimeError("REDIS_ENDPOINT must not be empty")
-
-    return host, port
-
-
-def _build_redis_url(config: RelayConfig) -> str:
-    endpoint = (config.redis_endpoint or "").strip()
-    login = (config.redis_login or "").strip()
-
-    host, port = _split_endpoint_host_port(endpoint)
-
-    auth = ""
-    if login:
-        username, password = (login.split(":", 1) + [""])[:2]
-        if password:
-            auth = f"{quote(username, safe='')}:{quote(password, safe='')}@"
-        else:
-            auth = f"{quote(username, safe='')}@"
-
-    return f"rediss://{auth}{host}:{port}/0"
 
 
 def _read_whitelist_from_github_url(url: str) -> str:
@@ -92,55 +44,10 @@ def _read_whitelist_from_github_url(url: str) -> str:
         ) from exc
 
 
-def get_redis(config: RelayConfig) -> redis_lib.Redis:
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis_lib.from_url(
-            _build_redis_url(config),
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
-    return _redis_client
-
-
 def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
-    """Return repo metadata loaded from Redis cache or a GitHub URL."""
-    redis_client = None
-    yaml_str = None
-
-    try:
-        redis_client = get_redis(config)
-        yaml_str = redis_client.get(WHITELIST_REDIS_KEY)
-    except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache read failed, falling back to GitHub: %s", exc)
-
-    if yaml_str is not None:
-        logger.debug("whitelist cache hit key=%s", WHITELIST_REDIS_KEY)
-    else:
-        logger.info(
-            "whitelist cache miss - loading %s and caching for %ss",
-            config.whitelist_url,
-            config.whitelist_ttl_seconds,
-        )
-
-        yaml_str = _read_whitelist_from_github_url(config.whitelist_url)
-
-        if redis_client is not None:
-            try:
-                redis_client.setex(
-                    WHITELIST_REDIS_KEY, config.whitelist_ttl_seconds, yaml_str
-                )
-                logger.debug(
-                    "whitelist cached %d bytes in Redis key=%s",
-                    len(yaml_str),
-                    WHITELIST_REDIS_KEY,
-                )
-            except redis_lib.exceptions.RedisError as exc:
-                logger.warning(
-                    "redis cache write failed, continuing without cache: %s", exc
-                )
-
+    """Return repo metadata loaded directly from the GitHub whitelist URL."""
+    logger.info("loading whitelist from %s", config.whitelist_url)
+    yaml_str = _read_whitelist_from_github_url(config.whitelist_url)
     raw: dict = yaml.safe_load(yaml_str) or {}
     mapping = parse_allowlist_info_map(raw)
     logger.debug("allowlist loaded: %d device(s)", len(mapping))

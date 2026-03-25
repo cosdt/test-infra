@@ -20,9 +20,6 @@ class RelayConfig:
     secret_store_arn: str
     whitelist_url: str
     upstream_repo: str
-    redis_endpoint: str
-    redis_login: str
-    whitelist_ttl_seconds: int
 
     @property
     def github_webhook_secret_bytes(self) -> bytes:
@@ -51,7 +48,4 @@ class RelayConfig:
             secret_store_arn=secret_store_arn,
             whitelist_url=_required_env("WHITELIST_URL", required=True),
             upstream_repo=os.getenv("UPSTREAM_REPO", "pytorch/pytorch"),
-            redis_endpoint=redis_endpoint,
-            redis_login=redis_login,
-            whitelist_ttl_seconds=int(os.getenv("WHITELIST_TTL_SECONDS", 1200)),
         )
