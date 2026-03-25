@@ -11,13 +11,12 @@ For more information, please refer to this [RFC](https://github.com/pytorch/pyto
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GITHUB_APP_ID` | GitHub App ID | `1234567` |
-| `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
-| `REDIS_ENDPOINT` | AWS ElastiCache endpoint hostname or `host:port` | `my-cache.xxxxxx.apse1.cache.amazonaws.com` |
-| `REDIS_LOGIN` | Optional Redis login in `username:password` format used when `REDIS_ENDPOINT` is only a hostname | `default:relay-password` |
+| `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
 | `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `pytorch/pytorch` |
 | `WHITELIST_URL` | GitHub blob URL to whitelist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/whitelist.yaml` |
-| `WHITELIST_TTL_SECONDS` | Optional whitelist cache TTL in Redis (seconds) | `1200` |
 | `LOG_LEVEL` | Logging level | `INFO` |
+
+The Lambda currently loads the whitelist directly from `WHITELIST_URL` on each invocation. ElastiCache-based caching is temporarily disabled.
 
 Only `L1` allowlist entries are supported.
 
@@ -58,11 +57,11 @@ make clean
 
 ```bash
 make prepare
-aws lambda update-function-code --region us-east-1 --function-name cross_repo_ci_webhook --zip-file fileb://deployment.zip
+aws lambda update-function-code --region ap-southeast-1 --function-name cross_repo_ci_webhook --zip-file fileb://deployment.zip
 ```
 
 You can override the deployment target if needed:
 
 ```bash
-make deploy AWS_REGION=us-east-1 FUNCTION_NAME=cross_repo_ci_webhook
+make deploy AWS_REGION=ap-southeast-1 FUNCTION_NAME=cross_repo_ci_webhook
 ```

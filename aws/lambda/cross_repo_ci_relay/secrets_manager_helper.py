@@ -34,7 +34,7 @@ def get_secret_from_aws(secret_store_arn: str) -> RelaySecretsFromStore:
             with attempt:
                 session = boto3.session.Session()
                 client = session.client(
-                    service_name="secretsmanager", region_name="us-east-1"
+                    service_name="secretsmanager", region_name="ap-southeast-1"
                 )
                 get_secret_value_response = client.get_secret_value(
                     SecretId=secret_store_arn
