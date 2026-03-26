@@ -98,9 +98,7 @@ def parse_allowlist_info_map(raw: dict) -> dict[str, dict]:
             repo = repo.strip("/")
             prev = mapping.get(repo)
             if prev:
-                raise RuntimeError(
-                    f"Invalid whitelist: duplicate repo entry {repo!r}"
-                )
+                raise RuntimeError(f"Invalid whitelist: duplicate repo entry {repo!r}")
 
             mapping[repo] = {
                 "level": level,
@@ -114,8 +112,10 @@ def parse_allowlist_info_map(raw: dict) -> dict[str, dict]:
 def pick_repo_full_name_by_allowlist(repos, allow_url: str):
     allow_url_n = allow_url.rstrip("/") if allow_url else None
     matches = [
-        repo for repo in repos
-        if (repo.get("html_url").rstrip("/") if repo.get("html_url") else None) == allow_url_n
+        repo
+        for repo in repos
+        if (repo.get("html_url").rstrip("/") if repo.get("html_url") else None)
+        == allow_url_n
     ]
     if not matches:
         return None

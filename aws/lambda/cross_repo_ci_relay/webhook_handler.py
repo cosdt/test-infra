@@ -138,10 +138,7 @@ def handle_github_webhook(
     installation_token = get_installation_token(config, int(installation_id))
 
     allowlist_info_map = redis_helper.load_allowlist_info_map(config)
-    allowlist_map = {
-        repo: info["repo"]
-        for repo, info in allowlist_info_map.items()
-    }
+    allowlist_map = {repo: info["repo"] for repo, info in allowlist_info_map.items()}
     if not allowlist_map:
         raise RelayHTTPException(status_code=400, detail="allowlist is empty")
 
