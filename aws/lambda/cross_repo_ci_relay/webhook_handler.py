@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from github import GithubIntegration
 from github.GithubException import GithubException
@@ -49,7 +50,7 @@ def _dispatch_to_allowlist(
     dispatched: list[dict] = []
     failed: list[dict] = []
 
-    for downstream_label, downstream_repo in sorted(allowlist_map.items()):
+    def __dispatch_one(downstream_label: str, downstream_repo: str) -> dict:
         logger.info(
             "dispatching %s target=%s repo=%s sha=%.12s action=%s",
             event_type,
@@ -66,13 +67,16 @@ def _dispatch_to_allowlist(
                 client_payload=client_payload,
                 timeout=20,
             )
-            dispatched.append({"target": downstream_label, "repo": downstream_repo})
             logger.info(
                 "dispatch succeeded event_type=%s target=%s repo=%s",
                 event_type,
                 downstream_label,
                 downstream_repo,
             )
+            return {
+                "ok": True,
+                "result": {"target": downstream_label, "repo": downstream_repo},
+            }
         except GithubException as e:
             logger.error(
                 "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
@@ -82,13 +86,14 @@ def _dispatch_to_allowlist(
                 getattr(e, "status", None),
                 getattr(e, "data", None),
             )
-            failed.append(
-                {
+            return {
+                "ok": False,
+                "result": {
                     "target": downstream_label,
                     "repo": downstream_repo,
                     "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
-                }
-            )
+                },
+            }
         except Exception as e:
             logger.error(
                 "dispatch failed event_type=%s target=%s repo=%s error=%s",
@@ -97,13 +102,50 @@ def _dispatch_to_allowlist(
                 downstream_repo,
                 e,
             )
-            failed.append(
-                {
+            return {
+                "ok": False,
+                "result": {
                     "target": downstream_label,
                     "repo": downstream_repo,
                     "error": f"GitHub dispatch failed: {e}",
-                }
+                },
+            }
+
+    targets = sorted(allowlist_map.items())
+    max_workers = min(4, len(targets))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures: list[tuple[str, str, Future[dict]]] = [
+            (
+                downstream_label,
+                downstream_repo,
+                executor.submit(__dispatch_one, downstream_label, downstream_repo),
             )
+            for downstream_label, downstream_repo in targets
+        ]
+
+        for downstream_label, downstream_repo, future in futures:
+            try:
+                dispatch_result = future.result()
+                if dispatch_result["ok"]:
+                    dispatched.append(dispatch_result["result"])
+                else:
+                    failed.append(dispatch_result["result"])
+            except Exception as e:
+                logger.error(
+                    "dispatch worker failed event_type=%s target=%s repo=%s error=%s",
+                    event_type,
+                    downstream_label,
+                    downstream_repo,
+                    e,
+                )
+                failed.append(
+                    {
+                        "target": downstream_label,
+                        "repo": downstream_repo,
+                        "error": f"GitHub dispatch failed: {e}",
+                    }
+                )
 
     return dispatched, failed
 
