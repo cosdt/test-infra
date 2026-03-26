@@ -1,7 +1,7 @@
+import asyncio
 import hashlib
 import hmac
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
 
 from github import GithubIntegration
 from github.GithubException import GithubException
@@ -47,107 +47,93 @@ def _dispatch_to_allowlist(
     sha: str,
     action: str,
 ) -> tuple[list[dict], list[dict]]:
-    dispatched: list[dict] = []
-    failed: list[dict] = []
+    async def _dispatch_async() -> tuple[list[dict], list[dict]]:
+        dispatched: list[dict] = []
+        failed: list[dict] = []
 
-    def __dispatch_one(downstream_label: str, downstream_repo: str) -> dict:
-        logger.info(
-            "dispatching %s target=%s repo=%s sha=%.12s action=%s",
-            event_type,
-            downstream_label,
-            downstream_repo,
-            sha,
-            action,
-        )
-        try:
-            github_client_helper.create_repository_dispatch(
-                token=installation_token,
-                repo_full_name=downstream_repo,
-                event_type=event_type,
-                client_payload=client_payload,
-                timeout=20,
-            )
-            logger.info(
-                "dispatch succeeded event_type=%s target=%s repo=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-            )
-            return {
-                "ok": True,
-                "result": {"target": downstream_label, "repo": downstream_repo},
-            }
-        except GithubException as e:
-            logger.error(
-                "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-                getattr(e, "status", None),
-                getattr(e, "data", None),
-            )
-            return {
-                "ok": False,
-                "result": {
-                    "target": downstream_label,
-                    "repo": downstream_repo,
-                    "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
-                },
-            }
-        except Exception as e:
-            logger.error(
-                "dispatch failed event_type=%s target=%s repo=%s error=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-                e,
-            )
-            return {
-                "ok": False,
-                "result": {
-                    "target": downstream_label,
-                    "repo": downstream_repo,
-                    "error": f"GitHub dispatch failed: {e}",
-                },
-            }
+        targets = sorted(allowlist_map.items())
+        max_concurrency = min(20, len(targets))
+        semaphore = asyncio.Semaphore(max_concurrency)
 
-    targets = sorted(allowlist_map.items())
-    max_workers = min(4, len(targets))
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures: list[tuple[str, str, Future[dict]]] = [
-            (
-                downstream_label,
-                downstream_repo,
-                executor.submit(__dispatch_one, downstream_label, downstream_repo),
-            )
-            for downstream_label, downstream_repo in targets
-        ]
-
-        for downstream_label, downstream_repo, future in futures:
-            try:
-                dispatch_result = future.result()
-                if dispatch_result["ok"]:
-                    dispatched.append(dispatch_result["result"])
-                else:
-                    failed.append(dispatch_result["result"])
-            except Exception as e:
-                logger.error(
-                    "dispatch worker failed event_type=%s target=%s repo=%s error=%s",
+        async def __dispatch_one(downstream_label: str, downstream_repo: str) -> dict:
+            async with semaphore:
+                logger.info(
+                    "dispatching %s target=%s repo=%s sha=%.12s action=%s",
                     event_type,
                     downstream_label,
                     downstream_repo,
-                    e,
+                    sha,
+                    action,
                 )
-                failed.append(
-                    {
-                        "target": downstream_label,
-                        "repo": downstream_repo,
-                        "error": f"GitHub dispatch failed: {e}",
+                try:
+                    await asyncio.to_thread(
+                        github_client_helper.create_repository_dispatch,
+                        token=installation_token,
+                        repo_full_name=downstream_repo,
+                        event_type=event_type,
+                        client_payload=client_payload,
+                        timeout=20,
+                    )
+                    logger.info(
+                        "dispatch succeeded event_type=%s target=%s repo=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                    )
+                    return {
+                        "ok": True,
+                        "result": {"target": downstream_label, "repo": downstream_repo},
                     }
-                )
+                except GithubException as e:
+                    logger.error(
+                        "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                        getattr(e, "status", None),
+                        getattr(e, "data", None),
+                    )
+                    return {
+                        "ok": False,
+                        "result": {
+                            "target": downstream_label,
+                            "repo": downstream_repo,
+                            "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
+                        },
+                    }
+                except Exception as e:
+                    logger.error(
+                        "dispatch failed event_type=%s target=%s repo=%s error=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                        e,
+                    )
+                    return {
+                        "ok": False,
+                        "result": {
+                            "target": downstream_label,
+                            "repo": downstream_repo,
+                            "error": f"GitHub dispatch failed: {e}",
+                        },
+                    }
 
-    return dispatched, failed
+        dispatch_results = await asyncio.gather(
+            *(
+                __dispatch_one(downstream_label, downstream_repo)
+                for downstream_label, downstream_repo in targets
+            )
+        )
+
+        for dispatch_result in dispatch_results:
+            if dispatch_result["ok"]:
+                dispatched.append(dispatch_result["result"])
+            else:
+                failed.append(dispatch_result["result"])
+
+        return dispatched, failed
+
+    return asyncio.run(_dispatch_async())
 
 
 def handle_github_webhook(
