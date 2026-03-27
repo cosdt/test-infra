@@ -115,7 +115,7 @@ def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
         redis_client = _get_redis(config)
         yaml_str = redis_client.get(WHITELIST_REDIS_KEY)
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache read failed, falling back to GitHub: %s", exc)
+        logger.warning("redis cache read failed, falling back to GitHub", exc_info=exc)
 
     if yaml_str is not None:
         logger.debug("whitelist cache hit key=%s", WHITELIST_REDIS_KEY)
@@ -140,7 +140,8 @@ def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
                 )
             except redis_lib.exceptions.RedisError as exc:
                 logger.warning(
-                    "redis cache write failed, continuing without cache: %s", exc
+                    "redis cache write failed, continuing without cache",
+                    exc_info=exc,
                 )
 
     raw: dict = yaml.safe_load(yaml_str) or {}
@@ -157,10 +158,10 @@ def has_seen_delivery(config: RelayConfig, delivery_id: str) -> bool:
         try:
             return redis_client.exists(key) == 1
         except redis_lib.exceptions.RedisError as exc:
-            logger.warning("redis exists check failed for %s: %s", key, exc)
+            logger.warning("redis exists check failed for %s", key, exc_info=exc)
             return False
     except Exception as exc:
-        logger.warning("failed to get redis client for delivery check: %s", exc)
+        logger.warning("failed to get redis client for delivery check", exc_info=exc)
         return False
 
 
@@ -177,6 +178,6 @@ def mark_delivery_processed(
             redis_client.setex(key, int(ttl_seconds), "1")
             logger.debug("marked delivery processed key=%s ttl=%s", key, ttl_seconds)
         except redis_lib.exceptions.RedisError as exc:
-            logger.warning("redis setex failed for %s: %s", key, exc)
+            logger.warning("redis setex failed for %s", key, exc_info=exc)
     except Exception as exc:
-        logger.warning("failed to get redis client to mark delivery: %s", exc)
+        logger.warning("failed to get redis client to mark delivery", exc_info=exc)

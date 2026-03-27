@@ -47,6 +47,15 @@ def _dispatch_to_allowlist(
     sha: str,
     action: str,
 ) -> tuple[list[dict], list[dict]]:
+    """
+    Due to the 10s timeout of Github webhooks, we need to dispatch to downstream
+    repositories concurrently to ensure we can trigger as many downstream workflows
+    as possible within the time limit. This function uses asyncio to dispatch to
+    multiple downstream repositories concurrently while respecting a maximum
+    concurrency limit to avoid overwhelming the GitHub API or the Lambda
+    environment.
+    """
+
     async def _dispatch_async() -> tuple[list[dict], list[dict]]:
         dispatched: list[dict] = []
         failed: list[dict] = []
@@ -85,7 +94,7 @@ def _dispatch_to_allowlist(
                         "result": {"target": downstream_label, "repo": downstream_repo},
                     }
                 except GithubException as e:
-                    logger.error(
+                    logger.exception(
                         "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
                         event_type,
                         downstream_label,
@@ -98,16 +107,19 @@ def _dispatch_to_allowlist(
                         "result": {
                             "target": downstream_label,
                             "repo": downstream_repo,
-                            "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
+                            "error": (
+                                "GitHub dispatch failed: "
+                                f"status={getattr(e, 'status', None)} "
+                                f"data={getattr(e, 'data', None)}"
+                            ),
                         },
                     }
                 except Exception as e:
-                    logger.error(
-                        "dispatch failed event_type=%s target=%s repo=%s error=%s",
+                    logger.exception(
+                        "dispatch failed event_type=%s target=%s repo=%s",
                         event_type,
                         downstream_label,
                         downstream_repo,
-                        e,
                     )
                     return {
                         "ok": False,
