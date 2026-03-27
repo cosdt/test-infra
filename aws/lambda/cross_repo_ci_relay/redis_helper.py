@@ -3,13 +3,13 @@
 import logging
 from urllib.parse import quote, urlparse
 
-from github import Github
-from github.GithubException import GithubException
 import redis as redis_lib
 import yaml
-
 from config import RelayConfig
+from github import Github
+from github.GithubException import GithubException
 from utils import parse_allowlist_info_map
+
 
 logger = logging.getLogger(__name__)
 

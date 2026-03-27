@@ -11,6 +11,7 @@ import webhook_handler
 from config import RelayConfig
 from utils import RelayHTTPException
 
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 

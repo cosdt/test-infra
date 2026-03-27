@@ -4,8 +4,8 @@ import logging
 from dataclasses import dataclass
 
 import boto3
-
 from utils import RetryWithBackoff
+
 
 logger = logging.getLogger(__name__)
 
