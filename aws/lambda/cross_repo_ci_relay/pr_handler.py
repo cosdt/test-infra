@@ -4,11 +4,38 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 import gh_helper
 from allowlist import AllowlistLevel, load_allowlist
 from config import RelayConfig
-from utils import HTTPException, PRDispatchPayload, PREvent, extract_pr_fields
+from utils import HTTPException, PRDispatchPayload
+
+
+@dataclass
+class PREvent:
+    repo: str
+    sha: str
+    pr_number: int
+    head_ref: str
+    base_ref: str
+    installation_id: int
+    action: str
+
+
+def extract_pr_fields(payload: dict) -> PREvent:
+    try:
+        return PREvent(
+            repo=payload["repository"]["full_name"],
+            sha=payload["pull_request"]["head"]["sha"],
+            pr_number=payload["pull_request"]["number"],
+            head_ref=payload["pull_request"]["head"]["ref"],
+            base_ref=payload["pull_request"]["base"]["ref"],
+            installation_id=payload["installation"]["id"],
+            action=payload["action"],
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Missing required field: {e}") from e
 
 
 logger = logging.getLogger(__name__)

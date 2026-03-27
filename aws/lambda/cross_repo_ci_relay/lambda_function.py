@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -10,11 +12,22 @@ from typing import Callable
 
 import pr_handler
 from config import RelayConfig, get_config
-from utils import HTTPException, verify_signature
+from utils import HTTPException
 
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+
+def _verify_signature(secret: str, body: bytes, signature: str) -> None:
+    if not signature:
+        raise HTTPException(status_code=400, detail="No signature")
+    mac = hmac.new(secret.encode(), body, hashlib.sha256)
+    expected = "sha256=" + mac.hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        logger.warning("webhook signature mismatch")
+        raise HTTPException(status_code=401, detail="Bad signature")
+
 
 _JSON_HEADERS = {"content-type": "application/json"}
 
@@ -53,7 +66,7 @@ def lambda_handler(event, context):
     try:
         config = get_config()
         payload = json.loads(body_bytes) if body_bytes else {}
-        verify_signature(
+        _verify_signature(
             config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")
         )
 
