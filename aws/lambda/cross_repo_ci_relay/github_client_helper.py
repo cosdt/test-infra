@@ -3,6 +3,7 @@ import logging
 import github
 from utils import PRDispatchPayload
 
+
 logger = logging.getLogger(__name__)
 
 _clients: dict[tuple[str, int], github.Github] = {}

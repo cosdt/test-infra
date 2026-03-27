@@ -3,13 +3,13 @@ import hashlib
 import hmac
 import logging
 
-from github import GithubIntegration
-from github.GithubException import GithubException
-
 import github_client_helper
 import redis_helper
 from config import RelayConfig
+from github import GithubIntegration
+from github.GithubException import GithubException
 from utils import PRDispatchPayload, RelayHTTPException
+
 
 logger = logging.getLogger(__name__)
 

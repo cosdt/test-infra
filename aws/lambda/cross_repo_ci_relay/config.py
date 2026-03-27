@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 
 from dotenv import find_dotenv, load_dotenv
 from secrets_manager_helper import get_runtime_secrets
