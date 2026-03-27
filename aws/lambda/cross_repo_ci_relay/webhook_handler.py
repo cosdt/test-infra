@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -46,66 +47,93 @@ def _dispatch_to_allowlist(
     sha: str,
     action: str,
 ) -> tuple[list[dict], list[dict]]:
-    dispatched: list[dict] = []
-    failed: list[dict] = []
+    async def _dispatch_async() -> tuple[list[dict], list[dict]]:
+        dispatched: list[dict] = []
+        failed: list[dict] = []
 
-    for downstream_label, downstream_repo in sorted(allowlist_map.items()):
-        logger.info(
-            "dispatching %s target=%s repo=%s sha=%.12s action=%s",
-            event_type,
-            downstream_label,
-            downstream_repo,
-            sha,
-            action,
+        targets = sorted(allowlist_map.items())
+        max_concurrency = min(20, len(targets))
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def __dispatch_one(downstream_label: str, downstream_repo: str) -> dict:
+            async with semaphore:
+                logger.info(
+                    "dispatching %s target=%s repo=%s sha=%.12s action=%s",
+                    event_type,
+                    downstream_label,
+                    downstream_repo,
+                    sha,
+                    action,
+                )
+                try:
+                    await asyncio.to_thread(
+                        github_client_helper.create_repository_dispatch,
+                        token=installation_token,
+                        repo_full_name=downstream_repo,
+                        event_type=event_type,
+                        client_payload=client_payload,
+                        timeout=20,
+                    )
+                    logger.info(
+                        "dispatch succeeded event_type=%s target=%s repo=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                    )
+                    return {
+                        "ok": True,
+                        "result": {"target": downstream_label, "repo": downstream_repo},
+                    }
+                except GithubException as e:
+                    logger.error(
+                        "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                        getattr(e, "status", None),
+                        getattr(e, "data", None),
+                    )
+                    return {
+                        "ok": False,
+                        "result": {
+                            "target": downstream_label,
+                            "repo": downstream_repo,
+                            "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
+                        },
+                    }
+                except Exception as e:
+                    logger.error(
+                        "dispatch failed event_type=%s target=%s repo=%s error=%s",
+                        event_type,
+                        downstream_label,
+                        downstream_repo,
+                        e,
+                    )
+                    return {
+                        "ok": False,
+                        "result": {
+                            "target": downstream_label,
+                            "repo": downstream_repo,
+                            "error": f"GitHub dispatch failed: {e}",
+                        },
+                    }
+
+        dispatch_results = await asyncio.gather(
+            *(
+                __dispatch_one(downstream_label, downstream_repo)
+                for downstream_label, downstream_repo in targets
+            )
         )
-        try:
-            github_client_helper.create_repository_dispatch(
-                token=installation_token,
-                repo_full_name=downstream_repo,
-                event_type=event_type,
-                client_payload=client_payload,
-                timeout=20,
-            )
-            dispatched.append({"target": downstream_label, "repo": downstream_repo})
-            logger.info(
-                "dispatch succeeded event_type=%s target=%s repo=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-            )
-        except GithubException as e:
-            logger.error(
-                "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-                getattr(e, "status", None),
-                getattr(e, "data", None),
-            )
-            failed.append(
-                {
-                    "target": downstream_label,
-                    "repo": downstream_repo,
-                    "error": f"GitHub dispatch failed: status={getattr(e, 'status', None)} data={getattr(e, 'data', None)}",
-                }
-            )
-        except Exception as e:
-            logger.error(
-                "dispatch failed event_type=%s target=%s repo=%s error=%s",
-                event_type,
-                downstream_label,
-                downstream_repo,
-                e,
-            )
-            failed.append(
-                {
-                    "target": downstream_label,
-                    "repo": downstream_repo,
-                    "error": f"GitHub dispatch failed: {e}",
-                }
-            )
 
-    return dispatched, failed
+        for dispatch_result in dispatch_results:
+            if dispatch_result["ok"]:
+                dispatched.append(dispatch_result["result"])
+            else:
+                failed.append(dispatch_result["result"])
+
+        return dispatched, failed
+
+    return asyncio.run(_dispatch_async())
 
 
 def handle_github_webhook(
@@ -138,10 +166,7 @@ def handle_github_webhook(
     installation_token = get_installation_token(config, int(installation_id))
 
     allowlist_info_map = redis_helper.load_allowlist_info_map(config)
-    allowlist_map = {
-        repo: info["repo"]
-        for repo, info in allowlist_info_map.items()
-    }
+    allowlist_map = {repo: info["repo"] for repo, info in allowlist_info_map.items()}
     if not allowlist_map:
         raise RelayHTTPException(status_code=400, detail="allowlist is empty")
 
