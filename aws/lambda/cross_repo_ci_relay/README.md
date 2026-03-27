@@ -14,7 +14,6 @@ For more information, please refer to this [RFC](https://github.com/pytorch/pyto
 | `SECRET_STORE_ARN` | AWS Secrets Manager secret ARN for sensitive config | `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
 | `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `pytorch/pytorch` |
 | `WHITELIST_URL` | GitHub blob URL to whitelist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/whitelist.yaml` |
-| `LOG_LEVEL` | Logging level | `INFO` |
 
 The Lambda currently loads the whitelist directly from `WHITELIST_URL` on each invocation. ElastiCache-based caching is temporarily disabled.
 
