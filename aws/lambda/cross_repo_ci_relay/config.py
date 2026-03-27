@@ -30,14 +30,12 @@ class RelayConfig:
         load_dotenv(find_dotenv(usecwd=False), override=False)
         secret_store_arn = os.getenv("SECRET_STORE_ARN", "")
         secrets = get_runtime_secrets(secret_store_arn) if secret_store_arn else None
-        github_webhook_secret = (
-            getattr(secrets, "github_webhook_secret", "")
-            or _required_env("GITHUB_WEBHOOK_SECRET")
-        )
-        github_app_private_key = (
-            getattr(secrets, "github_app_private_key", "")
-            or _required_env("GITHUB_APP_PRIVATE_KEY")
-        )
+        github_webhook_secret = getattr(
+            secrets, "github_webhook_secret", ""
+        ) or _required_env("GITHUB_WEBHOOK_SECRET")
+        github_app_private_key = getattr(
+            secrets, "github_app_private_key", ""
+        ) or _required_env("GITHUB_APP_PRIVATE_KEY")
         redis_endpoint = _required_env("REDIS_ENDPOINT")
         redis_login = os.getenv("REDIS_LOGIN", "")
 

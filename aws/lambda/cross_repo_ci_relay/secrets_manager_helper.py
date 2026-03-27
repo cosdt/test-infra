@@ -41,9 +41,7 @@ def get_secret_from_aws(secret_store_arn: str) -> RelaySecretsFromStore:
                 )
                 secret_value = json.loads(get_secret_value_response["SecretString"])
                 return RelaySecretsFromStore(
-                    github_webhook_secret=secret_value.get(
-                        "GITHUB_WEBHOOK_SECRET", ""
-                    ),
+                    github_webhook_secret=secret_value.get("GITHUB_WEBHOOK_SECRET", ""),
                     github_app_private_key=_decode_private_key(
                         secret_value.get("GITHUB_APP_PRIVATE_KEY", "")
                     ),

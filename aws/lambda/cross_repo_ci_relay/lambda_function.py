@@ -34,8 +34,16 @@ def lambda_handler(event, context):
 
     if method != "POST" or path != "/github/webhook":
         if path == "/github/webhook":
-            return {"statusCode": 405, "headers": _JSON_HEADERS, "body": json.dumps({"detail": "Method not allowed"})}
-        return {"statusCode": 404, "headers": _JSON_HEADERS, "body": json.dumps({"detail": "Not found"})}
+            return {
+                "statusCode": 405,
+                "headers": _JSON_HEADERS,
+                "body": json.dumps({"detail": "Method not allowed"}),
+            }
+        return {
+            "statusCode": 404,
+            "headers": _JSON_HEADERS,
+            "body": json.dumps({"detail": "Not found"}),
+        }
 
     logger.info("request method=%s path=%s", method, path)
     try:
@@ -49,4 +57,8 @@ def lambda_handler(event, context):
         )
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
     except RelayHTTPException as exc:
-        return {"statusCode": exc.status_code, "headers": _JSON_HEADERS, "body": json.dumps({"detail": exc.detail})}
+        return {
+            "statusCode": exc.status_code,
+            "headers": _JSON_HEADERS,
+            "body": json.dumps({"detail": exc.detail}),
+        }
