@@ -17,7 +17,6 @@ For more information, please refer to this [RFC](https://github.com/pytorch/pyto
 | `UPSTREAM_REPO` | Upstream repository (`owner/repo`) | `pytorch/pytorch` |
 | `WHITELIST_URL` | GitHub blob URL to whitelist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/whitelist.yaml` |
 | `WHITELIST_TTL_SECONDS` | Optional whitelist cache TTL in Redis (seconds) | `1200` |
-| `LOG_LEVEL` | Logging level | `INFO` |
 
 Only `L1` allowlist entries are supported.
 
