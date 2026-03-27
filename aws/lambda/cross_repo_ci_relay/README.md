@@ -57,11 +57,11 @@ make clean
 
 ```bash
 make prepare
-aws lambda update-function-code --region us-east-1 --function-name cross_repo_ci_webhook --zip-file fileb://deployment.zip
+aws lambda update-function-code --region us-east-1 FUNCTION_NAME=cross-repo-ci-webhook --zip-file fileb://deployment.zip
 ```
 
 You can override the deployment target if needed:
 
 ```bash
-make deploy AWS_REGION=us-east-1 FUNCTION_NAME=cross_repo_ci_webhook
+make deploy AWS_REGION=us-east-1 FUNCTION_NAME=cross-repo-ci-webhook
 ```
