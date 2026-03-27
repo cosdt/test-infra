@@ -14,6 +14,8 @@ from utils import parse_allowlist_info_map
 logger = logging.getLogger(__name__)
 
 WHITELIST_REDIS_KEY = "oot:whitelist_yaml"
+PROCESSED_DELIVERY_PREFIX = "oot:github_delivery:"
+PROCESSED_DELIVERY_DEFAULT_TTL = 900  # the longest time of AWS lambda survival
 
 _redis_client: redis_lib.Redis | None = None
 
@@ -92,7 +94,7 @@ def _read_whitelist_from_github_url(url: str) -> str:
         ) from exc
 
 
-def get_redis(config: RelayConfig) -> redis_lib.Redis:
+def _get_redis(config: RelayConfig) -> redis_lib.Redis:
     global _redis_client
     if _redis_client is None:
         _redis_client = redis_lib.from_url(
@@ -110,7 +112,7 @@ def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
     yaml_str = None
 
     try:
-        redis_client = get_redis(config)
+        redis_client = _get_redis(config)
         yaml_str = redis_client.get(WHITELIST_REDIS_KEY)
     except redis_lib.exceptions.RedisError as exc:
         logger.warning("redis cache read failed, falling back to GitHub: %s", exc)
@@ -145,3 +147,36 @@ def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
     mapping = parse_allowlist_info_map(raw)
     logger.debug("allowlist loaded: %d device(s)", len(mapping))
     return mapping
+
+
+def has_seen_delivery(config: RelayConfig, delivery_id: str) -> bool:
+    """Return True if this delivery ID was already recorded in Redis."""
+    try:
+        redis_client = _get_redis(config)
+        key = PROCESSED_DELIVERY_PREFIX + delivery_id
+        try:
+            return redis_client.exists(key) == 1
+        except redis_lib.exceptions.RedisError as exc:
+            logger.warning("redis exists check failed for %s: %s", key, exc)
+            return False
+    except Exception as exc:
+        logger.warning("failed to get redis client for delivery check: %s", exc)
+        return False
+
+
+def mark_delivery_processed(
+    config: RelayConfig,
+    delivery_id: str,
+    ttl_seconds: int = PROCESSED_DELIVERY_DEFAULT_TTL,
+) -> None:
+    """Mark a delivery ID as processed in Redis with a TTL. Best-effort: failures are logged but do not raise."""
+    try:
+        redis_client = _get_redis(config)
+        key = PROCESSED_DELIVERY_PREFIX + delivery_id
+        try:
+            redis_client.setex(key, int(ttl_seconds), "1")
+            logger.debug("marked delivery processed key=%s ttl=%s", key, ttl_seconds)
+        except redis_lib.exceptions.RedisError as exc:
+            logger.warning("redis setex failed for %s: %s", key, exc)
+    except Exception as exc:
+        logger.warning("failed to get redis client to mark delivery: %s", exc)

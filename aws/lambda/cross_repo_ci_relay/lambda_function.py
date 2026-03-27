@@ -55,6 +55,7 @@ def lambda_handler(event, context):
             payload,
             headers.get("x-hub-signature-256", ""),
             headers.get("x-github-event", ""),
+            headers.get("x-github-delivery", ""),
         )
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
     except RelayHTTPException as exc:

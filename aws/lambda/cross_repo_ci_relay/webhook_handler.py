@@ -142,10 +142,25 @@ def handle_github_webhook(
     payload: dict,
     signature: str,
     event: str,
+    delivery: str,
 ):
     if not signature:
         raise RelayHTTPException(status_code=400, detail="No signature")
     verify_signature(config, body, signature)
+
+    # If GitHub provided a delivery GUID header, use it to deduplicate retries.
+    if delivery:
+        try:
+            if redis_helper.has_seen_delivery(config, delivery):
+                logger.info(
+                    "duplicate delivery received, skipping delivery=%s", delivery
+                )
+                return {"ignored": True, "duplicate_delivery": True}
+            # Mark now to prevent concurrent/duplicate processing during long handling
+            redis_helper.mark_delivery_processed(config, delivery)
+        except Exception:
+            # Best-effort: if Redis fails, continue processing the webhook
+            logger.warning("delivery dedupe check failed, continuing: %s", delivery)
 
     if event != "pull_request":
         logger.debug("event=%s ignored", event)
