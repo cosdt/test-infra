@@ -1,183 +1,127 @@
-"""Redis-backed helpers for webhook Lambda allowlist caching."""
+"""Redis client."""
 
 import logging
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import redis as redis_lib
-import yaml
 from config import RelayConfig
-from github import Github
-from github.GithubException import GithubException
-from utils import parse_allowlist_info_map
 
 
 logger = logging.getLogger(__name__)
 
-WHITELIST_REDIS_KEY = "oot:whitelist_yaml"
+_ALLOWLIST_CACHE_KEY = "cross_repo_ci:allowlist_yaml"
 PROCESSED_DELIVERY_PREFIX = "oot:github_delivery:"
 PROCESSED_DELIVERY_DEFAULT_TTL = 900  # the longest time of AWS lambda survival
 
-_redis_client: redis_lib.Redis | None = None
+_client: redis_lib.Redis | None = None
 
 
-def _split_endpoint_host_port(endpoint: str) -> tuple[str, int]:
+def _parse_endpoint(endpoint: str) -> tuple[str, int]:
     host = endpoint.strip()
-    port = 6379
-
-    if host.startswith(("redis://", "rediss://")):
-        raise RuntimeError(
-            "REDIS_ENDPOINT must be an AWS ElastiCache endpoint hostname or host:port, not a redis URL"
-        )
-
-    if "/" in host:
-        raise RuntimeError(
-            "REDIS_ENDPOINT must be an AWS ElastiCache endpoint hostname or host:port"
-        )
-
-    if ":" in host:
-        maybe_host, maybe_port = host.rsplit(":", 1)
-        if maybe_port.isdigit():
-            host = maybe_host
-            port = int(maybe_port)
 
     if not host:
         raise RuntimeError("REDIS_ENDPOINT must not be empty")
 
+    if host.startswith(("redis://", "rediss://")):
+        raise RuntimeError(
+            "REDIS_ENDPOINT must be a hostname or host:port, not a redis URL"
+        )
+
+    if "/" in host:
+        raise RuntimeError("REDIS_ENDPOINT must be a hostname or host:port")
+
+    port = 6379
+    if ":" in host:
+        maybe_host, maybe_port = host.rsplit(":", 1)
+        if not maybe_port.isdigit():
+            raise RuntimeError(f"REDIS_ENDPOINT has invalid port: {maybe_port!r}")
+        host, port = maybe_host, int(maybe_port)
+
     return host, port
 
 
-def _build_redis_url(config: RelayConfig) -> str:
-    endpoint = (config.redis_endpoint or "").strip()
-    login = (config.redis_login or "").strip()
-
-    host, port = _split_endpoint_host_port(endpoint)
-
+def _build_url(config: RelayConfig) -> str:
+    host, port = _parse_endpoint(config.redis_endpoint or "")
     auth = ""
+    login = (config.redis_login or "").strip()
     if login:
         username, password = (login.split(":", 1) + [""])[:2]
         if password:
             auth = f"{quote(username, safe='')}:{quote(password, safe='')}@"
         else:
             auth = f"{quote(username, safe='')}@"
-
     return f"rediss://{auth}{host}:{port}/0"
 
 
-def _read_whitelist_from_github_url(url: str) -> str:
-    """Fetch whitelist YAML from a GitHub blob URL (https://github.com/<owner>/<repo>/blob/<ref>/<path>)."""
-    parsed = urlparse(url)
-    parts = [p for p in parsed.path.split("/") if p]
-    if (
-        parsed.scheme not in ("http", "https")
-        or parsed.netloc != "github.com"
-        or len(parts) < 5
-        or parts[2] != "blob"
-    ):
-        raise RuntimeError(
-            "Invalid GitHub whitelist URL. Expected format: "
-            "https://github.com/<owner>/<repo>/blob/<ref>/<path/to/file>"
-        )
-
-    owner, repo, _, ref = parts[:4]
-    file_path = "/".join(parts[4:])
-
-    try:
-        gh = Github(timeout=20)
-        repo_obj = gh.get_repo(f"{owner}/{repo}")
-        content_file = repo_obj.get_contents(file_path, ref=ref)
-        if isinstance(content_file, list):
-            raise RuntimeError(f"GitHub URL points to a directory, not a file: {url}")
-        return content_file.decoded_content.decode("utf-8")
-    except GithubException as exc:
-        raise RuntimeError(
-            f"Failed to fetch whitelist from GitHub URL {url}: {exc}"
-        ) from exc
-
-
-def _get_redis(config: RelayConfig) -> redis_lib.Redis:
-    global _redis_client
-    if _redis_client is None:
-        _redis_client = redis_lib.from_url(
-            _build_redis_url(config),
+def _get_client(config: RelayConfig) -> redis_lib.Redis:
+    global _client
+    if _client is None:
+        _client = redis_lib.from_url(
+            _build_url(config),
             decode_responses=True,
             socket_connect_timeout=2,
             socket_timeout=2,
         )
-    return _redis_client
+    return _client
 
 
-def load_allowlist_info_map(config: RelayConfig) -> dict[str, dict]:
-    """Return repo metadata loaded from Redis cache or a GitHub URL."""
-    redis_client = None
-    yaml_str = None
-
+def get_cached_yaml(config: RelayConfig) -> str | None:
+    """Return cached allowlist YAML string, or None on cache miss or Redis error."""
     try:
-        redis_client = _get_redis(config)
-        yaml_str = redis_client.get(WHITELIST_REDIS_KEY)
+        value = _get_client(config).get(_ALLOWLIST_CACHE_KEY)
+        if value is not None:
+            logger.debug("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
+        return value
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache read failed, falling back to GitHub", exc_info=exc)
-
-    if yaml_str is not None:
-        logger.debug("whitelist cache hit key=%s", WHITELIST_REDIS_KEY)
-    else:
-        logger.info(
-            "whitelist cache miss - loading %s and caching for %ss",
-            config.whitelist_url,
-            config.whitelist_ttl_seconds,
-        )
-
-        yaml_str = _read_whitelist_from_github_url(config.whitelist_url)
-
-        if redis_client is not None:
-            try:
-                redis_client.setex(
-                    WHITELIST_REDIS_KEY, config.whitelist_ttl_seconds, yaml_str
-                )
-                logger.debug(
-                    "whitelist cached %d bytes in Redis key=%s",
-                    len(yaml_str),
-                    WHITELIST_REDIS_KEY,
-                )
-            except redis_lib.exceptions.RedisError as exc:
-                logger.warning(
-                    "redis cache write failed, continuing without cache",
-                    exc_info=exc,
-                )
-
-    raw: dict = yaml.safe_load(yaml_str) or {}
-    mapping = parse_allowlist_info_map(raw)
-    logger.debug("allowlist loaded: %d device(s)", len(mapping))
-    return mapping
+        logger.warning("redis cache read failed, falling back to source: %s", exc)
+        return None
 
 
-def has_seen_delivery(config: RelayConfig, delivery_id: str) -> bool:
-    """Return True if this delivery ID was already recorded in Redis."""
+def set_cached_yaml(config: RelayConfig, yaml_str: str) -> None:
+    """Cache allowlist YAML string with TTL. Logs and ignores Redis errors."""
     try:
-        redis_client = _get_redis(config)
-        key = PROCESSED_DELIVERY_PREFIX + delivery_id
-        try:
-            return redis_client.exists(key) == 1
-        except redis_lib.exceptions.RedisError as exc:
-            logger.warning("redis exists check failed for %s", key, exc_info=exc)
-            return False
-    except Exception as exc:
-        logger.warning("failed to get redis client for delivery check", exc_info=exc)
-        return False
+        _get_client(config).setex(
+            _ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str
+        )
+        logger.debug(
+            "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
+        )
+    except redis_lib.exceptions.RedisError as exc:
+        logger.warning("redis cache write failed, continuing without cache: %s", exc)
 
 
-def mark_delivery_processed(
+def set_delivery_if_unseen(
     config: RelayConfig,
     delivery_id: str,
     ttl_seconds: int = PROCESSED_DELIVERY_DEFAULT_TTL,
-) -> None:
-    """Mark a delivery ID as processed in Redis with a TTL. Best-effort: failures are logged but do not raise."""
+) -> bool:
+    """Atomically register a delivery ID in Redis using SET NX.
+
+    Returns True if this is the first time the delivery is seen (caller should
+    proceed with processing). Returns False if it was already present (duplicate).
+    On Redis errors, returns True so the webhook is processed rather than silently
+    dropped.
+    """
     try:
-        redis_client = _get_redis(config)
+        redis_client = _get_client(config)
         key = PROCESSED_DELIVERY_PREFIX + delivery_id
         try:
-            redis_client.setex(key, int(ttl_seconds), "1")
-            logger.debug("marked delivery processed key=%s ttl=%s", key, ttl_seconds)
+            # SET key value NX EX ttl — atomic check-and-set
+            result = redis_client.set(key, "1", nx=True, ex=int(ttl_seconds))
+            if result is None:
+                # NX rejected: key already existed → duplicate delivery
+                logger.info("duplicate delivery detected key=%s", key)
+                return False
+            logger.debug("new delivery registered key=%s ttl=%s", key, ttl_seconds)
+            return True
         except redis_lib.exceptions.RedisError as exc:
-            logger.warning("redis setex failed for %s", key, exc_info=exc)
+            logger.warning(
+                "redis SET NX failed for %s, processing anyway", key, exc_info=exc
+            )
+            return True
     except Exception as exc:
-        logger.warning("failed to get redis client to mark delivery", exc_info=exc)
+        logger.warning(
+            "failed to get redis client for delivery set_nx, processing anyway",
+            exc_info=exc,
+        )
+        return True
