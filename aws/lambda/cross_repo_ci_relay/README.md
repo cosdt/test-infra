@@ -4,9 +4,27 @@ An AWS Lambda function that relays GitHub webhook events from the upstream repos
 
 For more information, please refer to this [RFC](https://github.com/pytorch/pytorch/issues/175022).
 
-## Environment Variables
+## How It Works
 
-### `cross_repo_ci_relay`
+The Lambda exposes a single endpoint: `POST /github/webhook`.
+
+When a `pull_request` event with action `opened`, `reopened`, or `synchronize` arrives from the upstream repository, the function:
+
+1. Verifies the GitHub webhook signature (`x-hub-signature-256`).
+2. Loads the downstream allowlist (from Redis cache or fetched via GitHub API).
+3. Dispatches a `repository_dispatch` event of type `pytorch-pr-trigger` to every repository listed in the allowlist (all levels L1–L4).
+
+The `repository_dispatch` `client_payload` sent to each downstream repo contains:
+
+| Field | Description |
+|-------|-------------|
+| `upstream_repo` | Upstream repository full name (e.g. `pytorch/pytorch`) |
+| `head_sha` | Commit SHA of the PR head |
+| `pr_number` | Pull request number |
+| `head_ref` | PR head branch name |
+| `base_ref` | PR base branch name |
+
+## Environment Variables
 
 | Variable | Required | Default | Description | Example |
 |----------|----------|---------|-------------|---------|
@@ -21,15 +39,13 @@ For more information, please refer to this [RFC](https://github.com/pytorch/pyto
 | `ALLOWLIST_TTL_SECONDS` | no | `1200` | Allowlist cache TTL in Redis (seconds) | `1200` |
 | `LOG_LEVEL` | no | `INFO` | Python logging level | `DEBUG` |
 
-\* Provide either `GITHUB_APP_SECRET` + `GITHUB_APP_PRIVATE_KEY` directly, or `SECRET_STORE_ARN` (Secrets Manager fallback).
-
-Only `L1` allowlist entries are supported.
+\* Provide either `GITHUB_APP_SECRET` + `GITHUB_APP_PRIVATE_KEY` directly, or `SECRET_STORE_ARN` (Secrets Manager fallback). Environment variables take priority over Secrets Manager.
 
 ## Allowlist Format
 
-`ALLOWLIST_URL` should point to a YAML file in GitHub blob format.
+`ALLOWLIST_URL` must point to a YAML file hosted as a GitHub blob (e.g. `https://github.com/<owner>/<repo>/blob/<ref>/allowlist.yaml`).
 
-Example:
+All levels (L1–L4) are dispatched to. Dispatch targets are the union of all repositories across every level.
 
 ```yaml
 L1:
@@ -43,30 +59,22 @@ L4:
   - org5/repo5: oncall1, oncall2
 ```
 
+Each entry is either a plain `owner/repo` string or a `owner/repo: oncall1, oncall2` mapping. Duplicate repositories across levels are not allowed.
+
+The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL controlled by `ALLOWLIST_TTL_SECONDS`. On a Redis error the function falls back to fetching directly from GitHub.
+
 ## Build and Deploy
 
 ### Make Targets
 
 ```bash
-# Build the Lambda zip
-make prepare
+# Build the Lambda zip (output: deployment.zip)
+make deployment.zip
 
-# Deploy webhook (build + aws lambda update-function-code)
+# Deploy to AWS Lambda (requires AWS CLI v2 configured with permissions)
 make deploy
 
 # Clean build artifacts
 make clean
 ```
 
-`make deploy` is equivalent to:
-
-```bash
-make prepare
-aws lambda update-function-code --region us-east-1 --function-name cross_repo_ci_webhook --zip-file fileb://deployment.zip
-```
-
-You can override the deployment target if needed:
-
-```bash
-make deploy AWS_REGION=us-east-1 FUNCTION_NAME=cross_repo_ci_webhook
-```
