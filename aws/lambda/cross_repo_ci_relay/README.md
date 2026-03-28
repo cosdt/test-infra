@@ -4,11 +4,14 @@ An AWS Lambda function that relays GitHub webhook events from the upstream repos
 
 For more information, please refer to this [RFC](https://github.com/pytorch/pytorch/issues/175022).
 
-## Allowlist Format
+## Overall Mechanism
 
-`ALLOWLIST_URL` must point to a YAML file hosted as a GitHub blob (e.g. `https://github.com/<owner>/<repo>/blob/<ref>/allowlist.yaml`).
+This service receives webhook events from an upstream GitHub repository and acts as a relay for cross-repository CI signaling.
 
-All levels (L1–L4) are dispatched to. Dispatch targets are the union of all repositories across every level.
+When a supported pull request event is received, the function validates the request, determines whether the event should be processed, and then resolves the downstream repositories that should receive the relay.
+
+Those downstream targets are defined through an allowlist file which is pointed by a url (set with `ALLOWLIST_URL` and should be hosted as a GitHub blob, e.g. `https://github.com/pytorch/pytorch/blob/main/.github/allowlist.yaml`), whose format is described below.
+
 
 ```yaml
 L1:
@@ -22,6 +25,8 @@ L4:
   - org5/repo5: oncall1, oncall2
 ```
 
+All levels (L1–L4) are dispatched to. Dispatch targets are the union of all repositories across every level.
+
 Each entry is either a plain `owner/repo` string or a `owner/repo: oncall1, oncall2` mapping. Duplicate repositories across levels are not allowed.
 
 The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL controlled by `ALLOWLIST_TTL_SECONDS`. On a Redis error the function falls back to fetching directly from GitHub.
@@ -30,29 +35,17 @@ The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL 
 
 ### Make Targets
 
+Build the Lambda zip (output: deployment.zip)
 ```bash
-# Build the Lambda zip (output: deployment.zip)
 make deployment.zip
-
-# Deploy to AWS Lambda (requires AWS CLI v2 configured with permissions)
-make deploy
-
-# Clean build artifacts
-make clean
 ```
 
-## Environment Variables
+Deploy to AWS Lambda (requires AWS CLI v2 configured with permissions)
+```bash
+make deploy AWS_REGION=us-east-1 FUNCTION_NAME=cross_repo_ci_webhook
+```
 
-| Variable | Required | Default | Description | Example |
-|----------|----------|---------|-------------|---------|
-| `GITHUB_APP_ID` | yes | — | GitHub App ID | `1234567` |
-| `GITHUB_APP_SECRET` | yes* | — | GitHub webhook secret (or use `SECRET_STORE_ARN`) | `whsec_...` |
-| `GITHUB_APP_PRIVATE_KEY` | yes* | — | GitHub App private key PEM (or use `SECRET_STORE_ARN`) | `-----BEGIN RSA...` |
-| `SECRET_STORE_ARN` | yes* | — | AWS Secrets Manager ARN containing `GITHUB_APP_SECRET` and `GITHUB_APP_PRIVATE_KEY` | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
-| `REDIS_ENDPOINT` | yes | — | AWS ElastiCache endpoint hostname or `host:port` | `my-cache.xxxxxx.apse1.cache.amazonaws.com` |
-| `REDIS_LOGIN` | no | — | Redis credentials in `username:password` format | `default:relay-password` |
-| `UPSTREAM_REPO` | no | `pytorch/pytorch` | Upstream repository (`owner/repo`) to relay webhooks from | `pytorch/pytorch` |
-| `ALLOWLIST_URL` | yes | — | GitHub blob URL to allowlist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/allowlist.yaml` |
-| `ALLOWLIST_TTL_SECONDS` | no | `1200` | Allowlist cache TTL in Redis (seconds) | `1200` |
-
-\* Provide either `GITHUB_APP_SECRET` + `GITHUB_APP_PRIVATE_KEY` directly, or `SECRET_STORE_ARN` (Secrets Manager fallback). Environment variables take priority over Secrets Manager.
+Clean build artifacts
+```bash
+make clean
+```
