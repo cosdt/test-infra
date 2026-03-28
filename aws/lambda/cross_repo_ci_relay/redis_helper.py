@@ -10,8 +10,6 @@ from config import RelayConfig
 logger = logging.getLogger(__name__)
 
 _ALLOWLIST_CACHE_KEY = "cross_repo_ci:allowlist_yaml"
-PROCESSED_DELIVERY_PREFIX = "oot:github_delivery:"
-PROCESSED_DELIVERY_DEFAULT_TTL = 900  # the longest time of AWS lambda survival
 
 _client: redis_lib.Redis | None = None
 
