@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import gh_helper
 from allowlist import AllowlistLevel, load_allowlist
+from github.GithubException import GithubException
 from config import RelayConfig
 from utils import HTTPException, PRDispatchPayload
 
@@ -83,7 +84,7 @@ def _dispatch_to_allowlist(
                     )
                     logger.info("dispatch succeeded event_type=%s repo=%s", event_type, repo)
                     return True, {"repo": repo}
-                except gh_helper.GHError as e:
+                except GithubException as e:
                     logger.error(
                         "dispatch failed event_type=%s repo=%s status=%s data=%s",
                         event_type, repo, e.status, e.data,

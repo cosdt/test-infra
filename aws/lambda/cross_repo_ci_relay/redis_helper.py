@@ -31,15 +31,17 @@ def _parse_endpoint(endpoint: str) -> tuple[str, int]:
     port = 6379
     if ":" in host:
         maybe_host, maybe_port = host.rsplit(":", 1)
-        if maybe_port.isdigit():
-            host, port = maybe_host, int(maybe_port)
+        if not maybe_port.isdigit():
+            raise RuntimeError(
+                f"REDIS_ENDPOINT has invalid port: {maybe_port!r}"
+            )
+        host, port = maybe_host, int(maybe_port)
 
     return host, port
 
 
 def _build_url(config: RelayConfig) -> str:
     host, port = _parse_endpoint(config.redis_endpoint or "")
-    scheme = "rediss" if config.redis_tls else "redis"
     auth = ""
     login = (config.redis_login or "").strip()
     if login:
@@ -48,7 +50,7 @@ def _build_url(config: RelayConfig) -> str:
             auth = f"{quote(username, safe='')}:{quote(password, safe='')}@"
         else:
             auth = f"{quote(username, safe='')}@"
-    return f"{scheme}://{auth}{host}:{port}/0"
+    return f"rediss://{auth}{host}:{port}/0"
 
 
 def _get_client(config: RelayConfig) -> redis_lib.Redis:
@@ -79,7 +81,7 @@ def set_cached_yaml(config: RelayConfig, yaml_str: str) -> None:
     """Cache allowlist YAML string with TTL. Logs and ignores Redis errors."""
     try:
         _get_client(config).setex(
-            _ALLOWLIST_CACHE_KEY, config.whitelist_ttl_seconds, yaml_str
+            _ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str
         )
         logger.debug(
             "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY

@@ -6,10 +6,8 @@ FUNCTION_NAME ?= cross_repo_ci_webhook
 deployment.zip: clean
 	mkdir -p ./deployment
 	cp $(SHARED) lambda_function.py ./deployment/
-	python3 -m pip install --target ./deployment -r requirements.txt $(PIP_FLAGS)
+	pip3 install --target ./deployment -r requirements.txt $(PIP_FLAGS)
 	cd deployment && zip -r ../deployment.zip .
-
-prepare: deployment.zip
 
 deploy: deployment.zip
 	aws lambda update-function-code --region $(AWS_REGION) --function-name $(FUNCTION_NAME) --zip-file fileb://deployment.zip

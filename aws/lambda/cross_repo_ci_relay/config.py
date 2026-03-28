@@ -50,12 +50,11 @@ class RelayConfig:
     github_app_secret: str
     github_app_private_key: str
     secret_store_arn: str
-    whitelist_url: str
+    allowlist_url: str
     upstream_repo: str
     redis_endpoint: str
     redis_login: str
-    redis_tls: bool
-    whitelist_ttl_seconds: int
+    allowlist_ttl_seconds: int
 
     @classmethod
     def from_env(cls) -> "RelayConfig":
@@ -93,21 +92,20 @@ class RelayConfig:
                 )
 
         try:
-            whitelist_ttl_seconds = int(os.getenv("WHITELIST_TTL_SECONDS", "1200"))
+            allowlist_ttl_seconds = int(os.getenv("ALLOWLIST_TTL_SECONDS", "1200"))
         except ValueError:
-            raise RuntimeError("WHITELIST_TTL_SECONDS must be a valid integer")
+            raise RuntimeError("ALLOWLIST_TTL_SECONDS must be a valid integer")
 
         return cls(
             github_app_id=_require("GITHUB_APP_ID"),
             github_app_secret=github_app_secret,
             github_app_private_key=github_app_private_key,
             secret_store_arn=secret_store_arn,
-            whitelist_url=_require("WHITELIST_URL"),
+            allowlist_url=_require("ALLOWLIST_URL"),
             upstream_repo=os.getenv("UPSTREAM_REPO", "pytorch/pytorch"),
             redis_endpoint=_require("REDIS_ENDPOINT"),
             redis_login=os.getenv("REDIS_LOGIN", ""),
-            redis_tls=os.getenv("REDIS_TLS", "true").lower() != "false",
-            whitelist_ttl_seconds=whitelist_ttl_seconds,
+            allowlist_ttl_seconds=allowlist_ttl_seconds,
         )
 
 
