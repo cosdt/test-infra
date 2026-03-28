@@ -1,5 +1,3 @@
-"""Lambda entrypoint for cross_repo_ci_webhook — handles POST /github/webhook."""
-
 from __future__ import annotations
 
 import base64
@@ -11,7 +9,7 @@ import os
 from typing import Callable
 
 import pr_handler
-from config import get_config, RelayConfig
+from config import RelayConfig, get_runtime_config
 from utils import HTTPException
 
 
@@ -64,13 +62,10 @@ def lambda_handler(event, context):
         }
 
     try:
-        config = get_config()
+        config = get_runtime_config()
         payload = json.loads(body_bytes) if body_bytes else {}
-        _verify_signature(
-            config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")
-        )
-
         repo = (payload.get("repository") or {}).get("full_name", "")
+
         if repo.lower() != config.upstream_repo.lower():
             logger.debug("repo=%s not upstream, ignored", repo)
             return {
@@ -78,6 +73,10 @@ def lambda_handler(event, context):
                 "headers": _JSON_HEADERS,
                 "body": json.dumps({"ignored": True}),
             }
+
+        _verify_signature(
+            config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")
+        )
 
         event_type = headers.get("x-github-event", "")
         handler = _EVENT_HANDLERS.get(event_type)

@@ -1,5 +1,3 @@
-"""Redis client."""
-
 import logging
 from urllib.parse import quote
 
@@ -9,7 +7,7 @@ from config import RelayConfig
 
 logger = logging.getLogger(__name__)
 
-_ALLOWLIST_CACHE_KEY = "cross_repo_ci:allowlist_yaml"
+_ALLOWLIST_CACHE_KEY = "crcr:allowlist_yaml"
 
 _client: redis_lib.Redis | None = None
 

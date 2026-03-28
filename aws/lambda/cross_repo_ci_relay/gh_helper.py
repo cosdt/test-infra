@@ -1,4 +1,4 @@
-"""GitHub API helpers — the only module that imports PyGithub."""
+"""GitHub API helpers"""
 
 import logging
 
@@ -10,7 +10,7 @@ from utils import PRDispatchPayload
 logger = logging.getLogger(__name__)
 
 
-def create_access_token(app_id: str, private_key: str, installation_id: int) -> str:
+def get_access_token(app_id: str, private_key: str, installation_id: int) -> str:
     """Return a short-lived installation access token for the given GitHub App installation."""
     try:
         app_id_int = int(app_id)

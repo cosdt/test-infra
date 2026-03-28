@@ -118,7 +118,7 @@ class RelayConfig:
 _instance: "RelayConfig | None" = None
 
 
-def get_config() -> RelayConfig:
+def get_runtime_config() -> RelayConfig:
     global _instance
     if _instance is None:
         _instance = RelayConfig.from_env()
