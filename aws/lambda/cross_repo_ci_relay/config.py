@@ -13,14 +13,15 @@ class RelaySecrets:
     github_app_private_key: str = ""
 
     @classmethod
-    def from_aws(cls, secret_store_arn: str) -> "RelaySecrets":
+    def from_aws(cls, secret_store_arn: str, client=None) -> "RelaySecrets":
         region = os.environ.get("AWS_REGION", "us-east-1")
         try:
-            client = boto3.session.Session().client(
-                "secretsmanager",
-                region_name=region,
-                config=Config(retries={"max_attempts": 3, "mode": "standard"}),
-            )
+            if client is None:
+                client = boto3.session.Session().client(
+                    "secretsmanager",
+                    region_name=region,
+                    config=Config(retries={"max_attempts": 3, "mode": "standard"}),
+                )
             response = client.get_secret_value(SecretId=secret_store_arn)
             secret = json.loads(response["SecretString"])
         except json.JSONDecodeError as e:
@@ -113,13 +114,3 @@ class RelayConfig:
             redis_login=os.getenv("REDIS_LOGIN", ""),
             allowlist_ttl_seconds=allowlist_ttl_seconds,
         )
-
-
-_instance: "RelayConfig | None" = None
-
-
-def get_runtime_config() -> RelayConfig:
-    global _instance
-    if _instance is None:
-        _instance = RelayConfig.from_env()
-    return _instance

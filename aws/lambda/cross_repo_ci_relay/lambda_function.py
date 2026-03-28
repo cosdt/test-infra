@@ -5,15 +5,13 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from typing import Callable
 
 import pr_handler
-from config import get_runtime_config, RelayConfig
+from config import RelayConfig
 from utils import HTTPException
 
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +60,12 @@ def lambda_handler(event, context):
         }
 
     try:
-        config = get_runtime_config()
+        config = RelayConfig.from_env()
+
+        _verify_signature(
+            config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")
+        )
+
         payload = json.loads(body_bytes) if body_bytes else {}
         repo = (payload.get("repository") or {}).get("full_name", "")
 
@@ -73,10 +76,6 @@ def lambda_handler(event, context):
                 "headers": _JSON_HEADERS,
                 "body": json.dumps({"ignored": True}),
             }
-
-        _verify_signature(
-            config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")
-        )
 
         event_type = headers.get("x-github-event", "")
         handler = _EVENT_HANDLERS.get(event_type)
@@ -104,7 +103,7 @@ def lambda_handler(event, context):
             "body": json.dumps({"detail": exc.detail}),
         }
     except Exception as exc:
-        logger.exception(f"unhandled error: {exc}")
+        logger.exception("unhandled error: %s", exc)
         return {
             "statusCode": 500,
             "headers": _JSON_HEADERS,
