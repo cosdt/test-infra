@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 _ALLOWLIST_CACHE_KEY = "crcr:allowlist_yaml"
 
-_client: redis_lib.Redis | None = None
-
 
 def _parse_endpoint(endpoint: str) -> tuple[str, int]:
     host = endpoint.strip()
@@ -49,38 +47,42 @@ def _build_url(config: RelayConfig) -> str:
     return f"rediss://{auth}{host}:{port}/0"
 
 
-def _get_client(config: RelayConfig) -> redis_lib.Redis:
-    global _client
-    if _client is None:
-        _client = redis_lib.from_url(
-            _build_url(config),
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
-    return _client
+def create_client(config: RelayConfig) -> redis_lib.Redis:
+    """Create a new Redis client from the given config."""
+    return redis_lib.from_url(
+        _build_url(config),
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+    )
 
 
-def get_cached_yaml(config: RelayConfig) -> str | None:
+def get_cached_yaml(
+    config: RelayConfig, client: redis_lib.Redis | None = None
+) -> str | None:
     """Return cached allowlist YAML string, or None on cache miss or Redis error."""
     try:
-        value = _get_client(config).get(_ALLOWLIST_CACHE_KEY)
+        if client is None:
+            client = create_client(config)
+        value = client.get(_ALLOWLIST_CACHE_KEY)
         if value is not None:
             logger.debug("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
         return value
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning(f"redis cache read failed, falling back to source: {exc}")
+        logger.warning("redis cache read failed, falling back to source: %s", exc)
         return None
 
 
-def set_cached_yaml(config: RelayConfig, yaml_str: str) -> None:
+def set_cached_yaml(
+    config: RelayConfig, yaml_str: str, client: redis_lib.Redis | None = None
+) -> None:
     """Cache allowlist YAML string with TTL. Logs and ignores Redis errors."""
     try:
-        _get_client(config).setex(
-            _ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str
-        )
+        if client is None:
+            client = create_client(config)
+        client.setex(_ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str)
         logger.debug(
-            f"allowlist cached {len(yaml_str)} bytes key={_ALLOWLIST_CACHE_KEY}"
+            "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
         )
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning(f"redis cache write failed, continuing without cache: {exc}")
+        logger.warning("redis cache write failed, continuing without cache: %s", exc)

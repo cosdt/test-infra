@@ -105,7 +105,10 @@ def _dispatch_to_allowlist(
             )
         except Exception as e:
             logger.error(
-                f"dispatch failed event_type={event_type} repo={downstream_repo} error={e}",
+                "dispatch failed event_type=%s repo=%s error=%s",
+                event_type,
+                downstream_repo,
+                e,
             )
             failed.append(
                 {"repo": downstream_repo, "error": f"GitHub dispatch failed: {e}"}
