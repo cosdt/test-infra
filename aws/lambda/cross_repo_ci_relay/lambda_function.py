@@ -9,7 +9,7 @@ import os
 from typing import Callable
 
 import pr_handler
-from config import RelayConfig, get_runtime_config
+from config import get_runtime_config, RelayConfig
 from utils import HTTPException
 
 
