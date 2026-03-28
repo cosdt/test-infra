@@ -7,7 +7,7 @@ import json
 import logging
 import os
 
-import webhook_handler
+import aws.lambda.cross_repo_ci_relay.pr_handler as pr_handler
 from config import RelayConfig
 from utils import RelayHTTPException
 
@@ -49,7 +49,7 @@ def lambda_handler(event, context):
     logger.info("request method=%s path=%s", method, path)
     try:
         payload = json.loads(body_bytes) if body_bytes else {}
-        result = webhook_handler.handle_github_webhook(
+        result = pr_handler.handle_github_webhook(
             _config,
             body_bytes,
             payload,

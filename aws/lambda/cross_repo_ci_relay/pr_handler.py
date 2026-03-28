@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import logging
 
-import github_client_helper
+import aws.lambda.cross_repo_ci_relay.gh_helper as gh_helper
 import redis_helper
 from config import RelayConfig
 from github import GithubIntegration
@@ -69,7 +69,7 @@ def _dispatch_to_allowlist(
                     action,
                 )
                 try:
-                    await github_client_helper.create_repository_dispatch(
+                    await gh_helper.create_repository_dispatch(
                         token=installation_token,
                         repo_full_name=downstream_repo,
                         event_type=event_type,
