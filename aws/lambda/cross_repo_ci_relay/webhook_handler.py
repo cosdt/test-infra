@@ -47,19 +47,13 @@ def _dispatch_to_allowlist(
     sha: str,
     action: str,
 ) -> tuple[list[dict], list[dict]]:
-    """
-    Due to the 10s timeout of Github webhooks, we need to dispatch to downstream
-    repositories concurrently to ensure we can trigger as many downstream workflows
-    as possible within the time limit. This function uses asyncio to dispatch to
-    multiple downstream repositories concurrently while respecting a maximum
-    concurrency limit to avoid overwhelming the GitHub API or the Lambda
-    environment.
-    """
-
+    # Due to the 10s timeout of Github webhooks, we need to dispatch to downstream
+    # repositories concurrently to ensure we can trigger as many downstream workflows
+    # as possible within the time limit. This function uses asyncio to dispatch to
+    # multiple downstream repositories concurrently while respecting a maximum
+    # concurrency limit to avoid overwhelming the GitHub API or the Lambda
+    # environment.
     async def _dispatch_async() -> tuple[list[dict], list[dict]]:
-        dispatched: list[dict] = []
-        failed: list[dict] = []
-
         targets = sorted(allowlist_map.items())
         max_concurrency = min(20, len(targets))
         semaphore = asyncio.Semaphore(max_concurrency)
@@ -75,60 +69,45 @@ def _dispatch_to_allowlist(
                     action,
                 )
                 try:
-                    await asyncio.to_thread(
-                        github_client_helper.create_repository_dispatch,
+                    await github_client_helper.create_repository_dispatch(
                         token=installation_token,
                         repo_full_name=downstream_repo,
                         event_type=event_type,
                         client_payload=client_payload,
                         timeout=20,
                     )
-                    logger.info(
-                        "dispatch succeeded event_type=%s target=%s repo=%s",
-                        event_type,
-                        downstream_label,
-                        downstream_repo,
-                    )
-                    return {
-                        "ok": True,
-                        "result": {"target": downstream_label, "repo": downstream_repo},
-                    }
-                except GithubException as e:
-                    logger.exception(
-                        "dispatch failed event_type=%s target=%s repo=%s status=%s data=%s",
-                        event_type,
-                        downstream_label,
-                        downstream_repo,
-                        getattr(e, "status", None),
-                        getattr(e, "data", None),
-                    )
-                    return {
-                        "ok": False,
-                        "result": {
-                            "target": downstream_label,
-                            "repo": downstream_repo,
-                            "error": (
-                                "GitHub dispatch failed: "
-                                f"status={getattr(e, 'status', None)} "
-                                f"data={getattr(e, 'data', None)}"
-                            ),
-                        },
-                    }
                 except Exception as e:
+                    error_detail = (
+                        f"status={e.status} data={e.data}"
+                        if isinstance(e, GithubException)
+                        else str(e)
+                    )
                     logger.exception(
-                        "dispatch failed event_type=%s target=%s repo=%s",
+                        "dispatch failed event_type=%s target=%s repo=%s error=%s",
                         event_type,
                         downstream_label,
                         downstream_repo,
+                        error_detail,
                     )
                     return {
                         "ok": False,
                         "result": {
                             "target": downstream_label,
                             "repo": downstream_repo,
-                            "error": f"GitHub dispatch failed: {e}",
+                            "error": f"GitHub dispatch failed: {error_detail}",
                         },
                     }
+
+                logger.info(
+                    "dispatch succeeded event_type=%s target=%s repo=%s",
+                    event_type,
+                    downstream_label,
+                    downstream_repo,
+                )
+                return {
+                    "ok": True,
+                    "result": {"target": downstream_label, "repo": downstream_repo},
+                }
 
         dispatch_results = await asyncio.gather(
             *(
@@ -136,13 +115,8 @@ def _dispatch_to_allowlist(
                 for downstream_label, downstream_repo in targets
             )
         )
-
-        for dispatch_result in dispatch_results:
-            if dispatch_result["ok"]:
-                dispatched.append(dispatch_result["result"])
-            else:
-                failed.append(dispatch_result["result"])
-
+        dispatched = [r["result"] for r in dispatch_results if r["ok"]]
+        failed = [r["result"] for r in dispatch_results if not r["ok"]]
         return dispatched, failed
 
     return asyncio.run(_dispatch_async())
@@ -178,13 +152,17 @@ def handle_github_webhook(
         logger.debug("event=%s ignored", event)
         return {"ignored": True}
 
-    repo = payload["repository"]["full_name"]
-    sha = payload["pull_request"]["head"]["sha"]
-    pr_number = payload["pull_request"]["number"]
-    head_ref = payload["pull_request"]["head"]["ref"]
-    base_ref = payload["pull_request"]["base"]["ref"]
-    installation_id = payload["installation"]["id"]
-    action = payload["action"]
+    try:
+        repo = payload["repository"]["full_name"]
+        sha = payload["pull_request"]["head"]["sha"]
+        pr_number = payload["pull_request"]["number"]
+        head_ref = payload["pull_request"]["head"]["ref"]
+        base_ref = payload["pull_request"]["base"]["ref"]
+        installation_id = payload["installation"]["id"]
+        action = payload["action"]
+    except KeyError as e:
+        logger.warning(f"missing expected payload field: {e}")
+        raise RelayHTTPException(status_code=400, detail=f"Missing field: {e}")
 
     if repo.lower() != config.upstream_repo.lower():
         logger.debug("pull_request repo=%s not upstream, ignored", repo)
