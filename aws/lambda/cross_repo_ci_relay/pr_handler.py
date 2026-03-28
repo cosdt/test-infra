@@ -114,7 +114,7 @@ def _dispatch_to_allowlist(
     return dispatched, failed
 
 
-def handle(config: RelayConfig, payload: dict, delivery_id: str) -> dict:
+def handle(config: RelayConfig, payload: dict) -> dict:
     event: PREvent = extract_pr_fields(payload)
 
     if event.action not in ("opened", "reopened", "synchronize"):
