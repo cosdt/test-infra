@@ -1,5 +1,3 @@
-"""Handler for GitHub pull_request webhook events."""
-
 from __future__ import annotations
 
 import logging
@@ -58,7 +56,7 @@ def _dispatch_to_allowlist(
         logger.info("allowlist is empty, nothing to dispatch")
         return [], []
 
-    installation_token = gh_helper.create_access_token(
+    installation_token = gh_helper.get_access_token(
         config.github_app_id, config.github_app_private_key, installation_id
     )
 

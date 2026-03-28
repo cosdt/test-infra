@@ -1,4 +1,4 @@
-"""Allowlist loading and parsing for cross_repo_ci_relay.
+"""Allowlist loading and parsing
 
 YAML format:
   L1:
