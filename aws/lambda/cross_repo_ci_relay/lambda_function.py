@@ -79,7 +79,6 @@ def lambda_handler(event, context):
                 "body": json.dumps({"ignored": True}),
             }
 
-        delivery_id = headers.get("x-github-delivery", "")
         event_type = headers.get("x-github-event", "")
         handler = _EVENT_HANDLERS.get(event_type)
         if handler is None:
@@ -90,7 +89,7 @@ def lambda_handler(event, context):
                 "body": json.dumps({"ignored": True}),
             }
 
-        result = handler(config, payload, delivery_id)
+        result = handler(config, payload)
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
 
     except json.JSONDecodeError:
@@ -106,7 +105,7 @@ def lambda_handler(event, context):
             "body": json.dumps({"detail": exc.detail}),
         }
     except Exception as exc:
-        logger.exception("unhandled error: %s", exc)
+        logger.exception(f"unhandled error: {exc}")
         return {
             "statusCode": 500,
             "headers": _JSON_HEADERS,

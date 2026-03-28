@@ -73,7 +73,7 @@ def get_cached_yaml(config: RelayConfig) -> str | None:
             logger.debug("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
         return value
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache read failed, falling back to source: %s", exc)
+        logger.warning(f"redis cache read failed, falling back to source: {exc}")
         return None
 
 
@@ -84,44 +84,7 @@ def set_cached_yaml(config: RelayConfig, yaml_str: str) -> None:
             _ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str
         )
         logger.debug(
-            "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
+            f"allowlist cached {len(yaml_str)} bytes key={_ALLOWLIST_CACHE_KEY}"
         )
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache write failed, continuing without cache: %s", exc)
-
-
-def set_delivery_if_unseen(
-    config: RelayConfig,
-    delivery_id: str,
-    ttl_seconds: int = PROCESSED_DELIVERY_DEFAULT_TTL,
-) -> bool:
-    """Atomically register a delivery ID in Redis using SET NX.
-
-    Returns True if this is the first time the delivery is seen (caller should
-    proceed with processing). Returns False if it was already present (duplicate).
-    On Redis errors, returns True so the webhook is processed rather than silently
-    dropped.
-    """
-    try:
-        redis_client = _get_client(config)
-        key = PROCESSED_DELIVERY_PREFIX + delivery_id
-        try:
-            # SET key value NX EX ttl — atomic check-and-set
-            result = redis_client.set(key, "1", nx=True, ex=int(ttl_seconds))
-            if result is None:
-                # NX rejected: key already existed → duplicate delivery
-                logger.info("duplicate delivery detected key=%s", key)
-                return False
-            logger.debug("new delivery registered key=%s ttl=%s", key, ttl_seconds)
-            return True
-        except redis_lib.exceptions.RedisError as exc:
-            logger.warning(
-                "redis SET NX failed for %s, processing anyway", key, exc_info=exc
-            )
-            return True
-    except Exception as exc:
-        logger.warning(
-            "failed to get redis client for delivery set_nx, processing anyway",
-            exc_info=exc,
-        )
-        return True
+        logger.warning(f"redis cache write failed, continuing without cache: {exc}")
