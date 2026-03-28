@@ -1,45 +1,8 @@
-# cross_repo_ci_relay
+# Cross Repo CI Relay
 
 An AWS Lambda function that relays GitHub webhook events from the upstream repository to downstream repositories.
 
 For more information, please refer to this [RFC](https://github.com/pytorch/pytorch/issues/175022).
-
-## How It Works
-
-The Lambda exposes a single endpoint: `POST /github/webhook`.
-
-When a `pull_request` event with action `opened`, `reopened`, or `synchronize` arrives from the upstream repository, the function:
-
-1. Verifies the GitHub webhook signature (`x-hub-signature-256`).
-2. Loads the downstream allowlist (from Redis cache or fetched via GitHub API).
-3. Dispatches a `repository_dispatch` event of type `pytorch-pr-trigger` to every repository listed in the allowlist (all levels L1–L4).
-
-The `repository_dispatch` `client_payload` sent to each downstream repo contains:
-
-| Field | Description |
-|-------|-------------|
-| `upstream_repo` | Upstream repository full name (e.g. `pytorch/pytorch`) |
-| `head_sha` | Commit SHA of the PR head |
-| `pr_number` | Pull request number |
-| `head_ref` | PR head branch name |
-| `base_ref` | PR base branch name |
-
-## Environment Variables
-
-| Variable | Required | Default | Description | Example |
-|----------|----------|---------|-------------|---------|
-| `GITHUB_APP_ID` | yes | — | GitHub App ID | `1234567` |
-| `GITHUB_APP_SECRET` | yes* | — | GitHub webhook secret (or use `SECRET_STORE_ARN`) | `whsec_...` |
-| `GITHUB_APP_PRIVATE_KEY` | yes* | — | GitHub App private key PEM (or use `SECRET_STORE_ARN`) | `-----BEGIN RSA...` |
-| `SECRET_STORE_ARN` | yes* | — | AWS Secrets Manager ARN containing `GITHUB_APP_SECRET` and `GITHUB_APP_PRIVATE_KEY` | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
-| `REDIS_ENDPOINT` | yes | — | AWS ElastiCache endpoint hostname or `host:port` | `my-cache.xxxxxx.apse1.cache.amazonaws.com` |
-| `REDIS_LOGIN` | no | — | Redis credentials in `username:password` format | `default:relay-password` |
-| `UPSTREAM_REPO` | no | `pytorch/pytorch` | Upstream repository (`owner/repo`) to relay webhooks from | `pytorch/pytorch` |
-| `ALLOWLIST_URL` | yes | — | GitHub blob URL to allowlist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/allowlist.yaml` |
-| `ALLOWLIST_TTL_SECONDS` | no | `1200` | Allowlist cache TTL in Redis (seconds) | `1200` |
-| `LOG_LEVEL` | no | `INFO` | Python logging level | `DEBUG` |
-
-\* Provide either `GITHUB_APP_SECRET` + `GITHUB_APP_PRIVATE_KEY` directly, or `SECRET_STORE_ARN` (Secrets Manager fallback). Environment variables take priority over Secrets Manager.
 
 ## Allowlist Format
 
@@ -78,3 +41,18 @@ make deploy
 make clean
 ```
 
+## Environment Variables
+
+| Variable | Required | Default | Description | Example |
+|----------|----------|---------|-------------|---------|
+| `GITHUB_APP_ID` | yes | — | GitHub App ID | `1234567` |
+| `GITHUB_APP_SECRET` | yes* | — | GitHub webhook secret (or use `SECRET_STORE_ARN`) | `whsec_...` |
+| `GITHUB_APP_PRIVATE_KEY` | yes* | — | GitHub App private key PEM (or use `SECRET_STORE_ARN`) | `-----BEGIN RSA...` |
+| `SECRET_STORE_ARN` | yes* | — | AWS Secrets Manager ARN containing `GITHUB_APP_SECRET` and `GITHUB_APP_PRIVATE_KEY` | `arn:aws:secretsmanager:us-east-1:123456789012:secret:cross-repo-ci-relay/app-secrets-xxxxxx` |
+| `REDIS_ENDPOINT` | yes | — | AWS ElastiCache endpoint hostname or `host:port` | `my-cache.xxxxxx.apse1.cache.amazonaws.com` |
+| `REDIS_LOGIN` | no | — | Redis credentials in `username:password` format | `default:relay-password` |
+| `UPSTREAM_REPO` | no | `pytorch/pytorch` | Upstream repository (`owner/repo`) to relay webhooks from | `pytorch/pytorch` |
+| `ALLOWLIST_URL` | yes | — | GitHub blob URL to allowlist YAML | `https://github.com/<owner>/<repo>/blob/<ref>/allowlist.yaml` |
+| `ALLOWLIST_TTL_SECONDS` | no | `1200` | Allowlist cache TTL in Redis (seconds) | `1200` |
+
+\* Provide either `GITHUB_APP_SECRET` + `GITHUB_APP_PRIVATE_KEY` directly, or `SECRET_STORE_ARN` (Secrets Manager fallback). Environment variables take priority over Secrets Manager.
