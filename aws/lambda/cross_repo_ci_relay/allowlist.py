@@ -87,7 +87,7 @@ class AllowlistMap:
         levels = list(AllowlistLevel)
         repos: list[str] = []
         oncalls: list[str] = []
-        for lvl in levels[levels.index(level):]:
+        for lvl in levels[levels.index(level) :]:
             lvl_repos, lvl_oncalls = self.get_level(lvl)
             repos.extend(lvl_repos)
             oncalls.extend(lvl_oncalls)
@@ -114,7 +114,9 @@ class AllowlistMap:
             for idx, raw_entry in enumerate(raw_entries):
                 entry = AllowlistEntry._from_raw(raw_entry, level, idx)
                 if entry.repo in seen_repos:
-                    raise RuntimeError(f"Invalid allowlist: duplicate repo {entry.repo!r}")
+                    raise RuntimeError(
+                        f"Invalid allowlist: duplicate repo {entry.repo!r}"
+                    )
                 seen_repos.add(entry.repo)
                 entries.append(entry)
             levels[level] = entries

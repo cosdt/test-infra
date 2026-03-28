@@ -1,7 +1,13 @@
 """GitHub API helpers — the only module that imports PyGithub."""
 
+import logging
+
 import github
 from github import GithubIntegration
+from utils import PRDispatchPayload
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_access_token(app_id: str, private_key: str, installation_id: int) -> str:
@@ -22,12 +28,17 @@ def create_repository_dispatch(
     token: str,
     repo_full_name: str,
     event_type: str,
-    client_payload: dict,
+    client_payload: PRDispatchPayload,
     timeout: int = 20,
 ) -> None:
-    github.Github(auth=github.Auth.Token(token), timeout=timeout).get_repo(
-        repo_full_name
-    ).create_repository_dispatch(event_type, client_payload)
+    """Trigger a repository_dispatch event via PyGithub."""
+    logger.debug(
+        "repository_dispatch repo=%s event_type=%s", repo_full_name, event_type
+    )
+    gh = github.Github(login_or_token=token, timeout=timeout)
+    gh.get_repo(repo_full_name).create_repository_dispatch(
+        event_type, dict(client_payload)
+    )
 
 
 def get_repo_file(owner: str, repo: str, file_path: str, ref: str) -> str:

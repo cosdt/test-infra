@@ -1,7 +1,7 @@
 SHARED := config.py utils.py redis_helper.py allowlist.py gh_helper.py pr_handler.py
 PIP_FLAGS := --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.10
-AWS_REGION ?= us-east-1
-FUNCTION_NAME ?= cross_repo_ci_webhook
+AWS_REGION := us-east-1
+FUNCTION_NAME := cross-repo-ci-relay
 
 deployment.zip: clean
 	mkdir -p ./deployment

@@ -32,9 +32,7 @@ def _parse_endpoint(endpoint: str) -> tuple[str, int]:
     if ":" in host:
         maybe_host, maybe_port = host.rsplit(":", 1)
         if not maybe_port.isdigit():
-            raise RuntimeError(
-                f"REDIS_ENDPOINT has invalid port: {maybe_port!r}"
-            )
+            raise RuntimeError(f"REDIS_ENDPOINT has invalid port: {maybe_port!r}")
         host, port = maybe_host, int(maybe_port)
 
     return host, port
@@ -73,7 +71,7 @@ def get_cached_yaml(config: RelayConfig) -> str | None:
             logger.debug("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
         return value
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache read failed, falling back to source: %s", exc)
+        logger.warning(f"redis cache read failed, falling back to source: {exc}")
         return None
 
 
@@ -84,7 +82,7 @@ def set_cached_yaml(config: RelayConfig, yaml_str: str) -> None:
             _ALLOWLIST_CACHE_KEY, config.allowlist_ttl_seconds, yaml_str
         )
         logger.debug(
-            "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
+            f"allowlist cached {len(yaml_str)} bytes key={_ALLOWLIST_CACHE_KEY}"
         )
     except redis_lib.exceptions.RedisError as exc:
-        logger.warning("redis cache write failed, continuing without cache: %s", exc)
+        logger.warning(f"redis cache write failed, continuing without cache: {exc}")

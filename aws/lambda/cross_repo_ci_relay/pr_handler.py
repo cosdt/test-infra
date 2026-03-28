@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 
 import gh_helper
 from allowlist import AllowlistLevel, load_allowlist
-from github.GithubException import GithubException
 from config import RelayConfig
+from github import GithubException
 from utils import HTTPException, PRDispatchPayload
 
 
-@dataclass
+@dataclass(frozen=True)
 class PREvent:
     repo: str
     sha: str
@@ -36,7 +35,9 @@ def extract_pr_fields(payload: dict) -> PREvent:
             action=payload["action"],
         )
     except KeyError as e:
-        raise HTTPException(status_code=400, detail=f"Missing required field: {e}") from e
+        raise HTTPException(
+            status_code=400, detail=f"Missing required field: {e}"
+        ) from e
 
 
 logger = logging.getLogger(__name__)
@@ -64,45 +65,58 @@ def _dispatch_to_allowlist(
     sha = client_payload["head_sha"]
     targets = sorted(backends)
 
-    async def _run() -> tuple[list[dict], list[dict]]:
-        semaphore = asyncio.Semaphore(min(20, len(targets)) or 1)
+    dispatched: list[dict] = []
+    failed: list[dict] = []
+    # Currently the dispatching is done sequentially, which is simpler and good enough for the expected scale.
+    # But in the future, when downstream repo is getting more and more,
+    # the dispatching should be optimized to parallel.
+    for downstream_repo in targets:
+        logger.info(
+            "dispatching %s repo=%s sha=%.12s action=%s",
+            event_type,
+            downstream_repo,
+            sha,
+            action,
+        )
+        try:
+            gh_helper.create_repository_dispatch(
+                token=installation_token,
+                repo_full_name=downstream_repo,
+                event_type=event_type,
+                client_payload=client_payload,
+            )
+            logger.info(
+                "dispatch succeeded event_type=%s repo=%s",
+                event_type,
+                downstream_repo,
+            )
+            dispatched.append({"repo": downstream_repo})
+        except GithubException as e:
+            logger.error(
+                "dispatch failed event_type=%s repo=%s status=%s data=%s",
+                event_type,
+                downstream_repo,
+                e.status,
+                e.data,
+            )
+            failed.append(
+                {
+                    "repo": downstream_repo,
+                    "error": f"GitHub dispatch failed: status={e.status} data={e.data}",
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"dispatch failed event_type={event_type} repo={downstream_repo} error={e}",
+            )
+            failed.append(
+                {"repo": downstream_repo, "error": f"GitHub dispatch failed: {e}"}
+            )
 
-        async def _one(repo: str) -> tuple[bool, dict]:
-            async with semaphore:
-                logger.info(
-                    "dispatching %s repo=%s sha=%.12s action=%s",
-                    event_type, repo, sha, action,
-                )
-                try:
-                    await asyncio.to_thread(
-                        gh_helper.create_repository_dispatch,
-                        token=installation_token,
-                        repo_full_name=repo,
-                        event_type=event_type,
-                        client_payload=client_payload,
-                        timeout=20,
-                    )
-                    logger.info("dispatch succeeded event_type=%s repo=%s", event_type, repo)
-                    return True, {"repo": repo}
-                except GithubException as e:
-                    logger.error(
-                        "dispatch failed event_type=%s repo=%s status=%s data=%s",
-                        event_type, repo, e.status, e.data,
-                    )
-                    return False, {"repo": repo, "error": f"GitHub dispatch failed: status={e.status} data={e.data}"}
-                except Exception as e:
-                    logger.error("dispatch failed event_type=%s repo=%s error=%s", event_type, repo, e)
-                    return False, {"repo": repo, "error": f"GitHub dispatch failed: {e}"}
-
-        results = await asyncio.gather(*(_one(repo) for repo in targets))
-        dispatched = [r for ok, r in results if ok]
-        failed = [r for ok, r in results if not ok]
-        return dispatched, failed
-
-    return asyncio.run(_run())
+    return dispatched, failed
 
 
-def handle(config: RelayConfig, payload: dict) -> dict:
+def handle(config: RelayConfig, payload: dict, delivery_id: str) -> dict:
     event: PREvent = extract_pr_fields(payload)
 
     if event.action not in ("opened", "reopened", "synchronize"):

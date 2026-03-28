@@ -68,10 +68,12 @@ class RelayConfig:
         if not github_app_secret or not github_app_private_key:
             if not secret_store_arn:
                 missing = [
-                    v for v, val in [
+                    v
+                    for v, val in [
                         ("GITHUB_APP_SECRET", github_app_secret),
                         ("GITHUB_APP_PRIVATE_KEY", github_app_private_key),
-                    ] if not val
+                    ]
+                    if not val
                 ]
                 raise RuntimeError(
                     f"Missing required environment variables: {', '.join(missing)} "
@@ -79,12 +81,16 @@ class RelayConfig:
                 )
             secrets = RelaySecrets.from_aws(secret_store_arn)
             github_app_secret = github_app_secret or secrets.github_app_secret
-            github_app_private_key = github_app_private_key or secrets.github_app_private_key
+            github_app_private_key = (
+                github_app_private_key or secrets.github_app_private_key
+            )
             missing_in_secret = [
-                v for v, val in [
+                v
+                for v, val in [
                     ("GITHUB_APP_SECRET", github_app_secret),
                     ("GITHUB_APP_PRIVATE_KEY", github_app_private_key),
-                ] if not val
+                ]
+                if not val
             ]
             if missing_in_secret:
                 raise RuntimeError(

@@ -11,7 +11,7 @@ import os
 from typing import Callable
 
 import pr_handler
-from config import RelayConfig, get_config
+from config import get_config, RelayConfig
 from utils import HTTPException
 
 
@@ -105,7 +105,7 @@ def lambda_handler(event, context):
             "body": json.dumps({"detail": exc.detail}),
         }
     except Exception as exc:
-        logger.exception("unhandled error: %s", exc)
+        logger.exception(f"unhandled error: {exc}")
         return {
             "statusCode": 500,
             "headers": _JSON_HEADERS,
