@@ -1,48 +1,49 @@
 name: "Checkout PyTorch PR"
-description: >
-  Checks out the upstream PyTorch PR commit into the downstream workspace
-  based on the `repository_dispatch` client_payload fields. This action
-  encapsulates all git logic so downstream repos do not need to parse the
-  payload or run git commands themselves.
+description: "Checks out the upstream PyTorch PR commit into the downstream workspace based on the `repository_dispatch` client_payload fields. This action encapsulates all git logic so downstream repos do not need to parse the payload or run git commands themselves."
 
 inputs:
   path:
-    description: >
-      Relative path under $GITHUB_WORKSPACE where the upstream repo will be
-      placed. Defaults to "/tmp/pytorch".
+    description: "Checkout path relative to $GITHUB_WORKSPACE"
     required: false
-    default: "/tmp/pytorch"
+    default: "pytorch"
+  token:
+    description: "GitHub token for auth (prevents rate limits)"
+    required: false
+    default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - name: Check out upstream commit
+    - name: Fetch and Checkout Upstream
       shell: bash
       env:
-        CHECKOUT_PATH: ${{ inputs.path }}
         UPSTREAM_REPO: ${{ github.event.client_payload.upstream_repo }}
         HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+        CHECKOUT_PATH: ${{ github.workspace }}/${{ inputs.path }}
+        GH_TOKEN: ${{ inputs.token }}
       run: |
         set -euo pipefail
 
-        echo "::group::Checkout ${{ github.event.client_payload.upstream_repo }}@${UPSTREAM_REPO} → ${CHECKOUT_PATH}"
+        echo "::group::Fetching ${UPSTREAM_REPO}@${HEAD_SHA}"
 
-        # Initialise a bare-minimum local repo to avoid fetching the full history.
+        echo "Clean & Prepare ${CHECKOUT_PATH}"
         rm -rf "${CHECKOUT_PATH}"
         mkdir -p "${CHECKOUT_PATH}"
-        cd "${CHECKOUT_PATH}"
-        git init
-        git remote add origin "https://github.com/${UPSTREAM_REPO}.git"
+        pushd "${CHECKOUT_PATH}"
 
-        # GitHub supports single-SHA fetches via the partial-clone protocol when
-        # uploadpack.allowDirectFetch is enabled on the remote (it is for github.com).
+        echo "Init repo ${UPSTREAM_REPO}"
+        git init -q
+        git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${UPSTREAM_REPO}.git"
+        
+        echo "Fetching commit ${HEAD_SHA}..."
         git fetch --depth=1 origin "${HEAD_SHA}"
-        git checkout FETCH_HEAD
+        git checkout -q FETCH_HEAD
 
-        # Initialise and fetch submodules at the checked-out commit.
-        # Try a shallow submodule clone first, fall back to full clone if needed.
-        git submodule sync --recursive || true
-        git submodule update --init --recursive --depth 1 || git submodule update --init --recursive
+        echo "Initializing submodules..."
+        git submodule sync --recursive
+        git submodule update --init --recursive --jobs 8
 
-        echo "Checked out ${UPSTREAM_REPO} at $(git rev-parse HEAD)"
+        popd
+        
+        echo "Successfully checked out to $(git rev-parse HEAD)"
         echo "::endgroup::"
