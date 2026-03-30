@@ -1,0 +1,48 @@
+name: "Checkout PyTorch PR"
+description: >
+  Checks out the upstream PyTorch PR commit into the downstream workspace
+  based on the `repository_dispatch` client_payload fields. This action
+  encapsulates all git logic so downstream repos do not need to parse the
+  payload or run git commands themselves.
+
+inputs:
+  path:
+    description: >
+      Relative path under $GITHUB_WORKSPACE where the upstream repo will be
+      placed. Defaults to "/tmp/pytorch".
+    required: false
+    default: "/tmp/pytorch"
+
+runs:
+  using: composite
+  steps:
+    - name: Check out upstream commit
+      shell: bash
+      env:
+        CHECKOUT_PATH: ${{ inputs.path }}
+        UPSTREAM_REPO: ${{ github.event.client_payload.upstream_repo }}
+        HEAD_SHA: ${{ github.event.client_payload.head_sha }}
+      run: |
+        set -euo pipefail
+
+        echo "::group::Checkout ${{ github.event.client_payload.upstream_repo }}@${UPSTREAM_REPO} → ${CHECKOUT_PATH}"
+
+        # Initialise a bare-minimum local repo to avoid fetching the full history.
+        rm -rf "${CHECKOUT_PATH}"
+        mkdir -p "${CHECKOUT_PATH}"
+        cd "${CHECKOUT_PATH}"
+        git init
+        git remote add origin "https://github.com/${UPSTREAM_REPO}.git"
+
+        # GitHub supports single-SHA fetches via the partial-clone protocol when
+        # uploadpack.allowDirectFetch is enabled on the remote (it is for github.com).
+        git fetch --depth=1 origin "${HEAD_SHA}"
+        git checkout FETCH_HEAD
+
+        # Initialise and fetch submodules at the checked-out commit.
+        # Try a shallow submodule clone first, fall back to full clone if needed.
+        git submodule sync --recursive || true
+        git submodule update --init --recursive --depth 1 || git submodule update --init --recursive
+
+        echo "Checked out ${UPSTREAM_REPO} at $(git rev-parse HEAD)"
+        echo "::endgroup::"
