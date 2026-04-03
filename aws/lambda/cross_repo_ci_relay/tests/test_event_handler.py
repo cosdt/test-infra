@@ -28,7 +28,7 @@ def _payload(action="synchronize"):
 class TestEventHandler(unittest.TestCase):
     def test_ignored_action(self):
         self.assertEqual(
-            handle(_cfg(), _payload(action="closed"), "pull_request", "delivery-1"),
+            handle(_cfg(), _payload(action="assigned"), "pull_request", "delivery-1"),
             {"ignored": True},
         )
 
