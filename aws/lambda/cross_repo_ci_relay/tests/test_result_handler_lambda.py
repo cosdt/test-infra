@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from result.lambda_function import lambda_handler
-from utils.misc import HTTPException
+from utils.types import HTTPException
 
 
 class TestResultLambdaFunction(unittest.TestCase):

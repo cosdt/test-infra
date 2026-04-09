@@ -9,7 +9,7 @@ import jwt
 import utils.redis_helper as redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
-from utils.misc import (
+from utils.types import (
     HTTPException,
     OOTStatusRecord,
     ResultCallbackPayload,

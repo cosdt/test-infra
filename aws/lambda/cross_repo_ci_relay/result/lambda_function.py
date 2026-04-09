@@ -5,7 +5,7 @@ import json
 import logging
 
 from utils.config import RelayConfig
-from utils.misc import HTTPException
+from utils.types import HTTPException
 
 from . import result_handler
 

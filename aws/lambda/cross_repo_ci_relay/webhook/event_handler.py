@@ -7,7 +7,7 @@ from concurrent.futures import as_completed, ThreadPoolExecutor
 from utils import gh_helper, redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
-from utils.misc import EventDispatchPayload, HTTPException
+from utils.types import EventDispatchPayload, HTTPException
 
 
 logger = logging.getLogger(__name__)

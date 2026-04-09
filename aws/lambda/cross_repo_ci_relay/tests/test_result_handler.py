@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from result.result_handler import handle, validate_payload
-from utils.misc import HTTPException
+from utils.types import HTTPException
 
 
 def _cfg():
