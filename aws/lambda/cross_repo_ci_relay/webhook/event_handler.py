@@ -4,10 +4,10 @@ import json
 import logging
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
-import gh_helper
-from allowlist import AllowlistLevel, load_allowlist
-from config import RelayConfig
-from utils import EventDispatchPayload, HTTPException
+from utils import gh_helper, redis_helper
+from utils.allowlist import AllowlistLevel, load_allowlist
+from utils.config import RelayConfig
+from utils.misc import EventDispatchPayload, HTTPException
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,9 @@ def _dispatch_to_allowlist(
         return [], []
 
     targets = sorted(backends)
+
+    redis_helper.create_client(config)
+    delivery_id = client_payload["delivery_id"]
 
     dispatched: list[dict] = []
     failed: list[dict] = []
@@ -107,6 +110,8 @@ def handle(
         "delivery_id": delivery_id,
         "payload": payload,
     }
+    if config.result_callback_url:
+        client_payload["callback_url"] = config.result_callback_url
     # GitHub repository_dispatch accepts at most 65 KB of JSON in client_payload.
     # We currently pass through the full webhook payload, so this size log helps
     # diagnose future failures if large pull_request events start breaching that limit.

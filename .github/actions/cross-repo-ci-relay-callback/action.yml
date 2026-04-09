@@ -1,0 +1,196 @@
+name: Cross-Repo CI Relay Callback
+
+description: >
+  Report the status of a downstream CI workflow back to the Cross-Repo CI
+  Relay server.  The job must have `id-token: write` permission so that a
+  GitHub OIDC token can be minted and used to authenticate the callback.
+
+  When triggered by a `repository_dispatch` event from the relay, most inputs
+  can be left at their defaults — values are read directly from
+  `github.event.client_payload`.
+
+inputs:
+  relay-url:
+    description: >
+      Base URL of the relay server.  When triggered via `repository_dispatch`
+      the relay injects its callback URL into `client_payload.callback_url`,
+      so this defaults to that value.  Override only when calling from a
+      context where the event is not a relay-originated dispatch.
+    required: false
+    default: ${{ github.event.client_payload.callback_url }}
+  upstream-repo:
+    description: >
+      The upstream repository in "owner/repo" form that owns the PR being
+      reported on (e.g. pytorch/pytorch).  Defaults to the sender repository
+      field from the relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.repository.full_name }}
+  pr-number:
+    description: >
+      Pull-request number in the upstream repository.  Defaults to the PR
+      number from the relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.number }}
+  head-sha:
+    description: >
+      The commit SHA being reported on.  Defaults to the head SHA from the
+      relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.pull_request.head.sha }}
+  status:
+    description: >
+      Workflow status to report.  Must be either "in_progress" or "completed".
+    required: true
+  conclusion:
+    description: >
+      Conclusion of the workflow run.  Required (and must be "success" or
+      "failure") when status is "completed".  Ignored when status is
+      "in_progress".
+    required: false
+    default: ''
+  workflow-name:
+    description: Human-readable display name of the downstream CI workflow.
+    required: false
+    default: ${{ github.workflow }}
+  workflow-url:
+    description: >
+      URL pointing to the downstream workflow run.  Defaults to the URL of
+      the current run.
+    required: false
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  run-id:
+    description: >
+      Numeric GitHub Actions workflow run ID.  Defaults to the current run ID.
+      Passed to the relay so the HUD can correlate records with GitHub runs.
+    required: false
+    default: ${{ github.run_id }}
+  job-id:
+    description: >
+      Numeric GitHub Actions job ID within the workflow run.  Leave empty to
+      omit (the relay will fall back to the run ID for deduplication).
+      The job ID is not directly available as a GitHub Actions expression;
+      pass it via a prior step that calls the GitHub API if needed.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Send callback to relay server
+      shell: bash
+      env:
+        RELAY_URL: ${{ inputs.relay-url }}
+        UPSTREAM_REPO: ${{ inputs.upstream-repo }}
+        DOWNSTREAM_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        STATUS: ${{ inputs.status }}
+        CONCLUSION: ${{ inputs.conclusion }}
+        WORKFLOW_NAME: ${{ inputs.workflow-name }}
+        WORKFLOW_URL: ${{ inputs.workflow-url }}
+        RUN_ID: ${{ inputs.run-id }}
+        JOB_ID: ${{ inputs.job-id }}
+        ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+      run: |
+        set -euo pipefail
+
+        # ---------------------------------------------------------------------------
+        # 1. Validate required runtime values that come from dispatch payload defaults.
+        # ---------------------------------------------------------------------------
+        if [[ -z "${RELAY_URL:-}" ]]; then
+          echo "::error::relay-url is empty. Either pass it explicitly or ensure the" \
+               "workflow is triggered by a relay repository_dispatch that includes" \
+               "client_payload.callback_url."
+          exit 1
+        fi
+
+        for var in UPSTREAM_REPO PR_NUMBER HEAD_SHA STATUS; do
+          if [[ -z "${!var:-}" ]]; then
+            echo "::error::Required input '${var}' is empty. Pass it explicitly or" \
+                 "ensure the workflow is triggered by a relay repository_dispatch."
+            exit 1
+          fi
+        done
+
+        # ---------------------------------------------------------------------------
+        # 2. Obtain a GitHub OIDC token for this workflow run.
+        #    The job must declare `permissions: id-token: write`.
+        # ---------------------------------------------------------------------------
+        if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+          echo "::error::OIDC token environment variables are not set." \
+               "Add 'permissions: id-token: write' to the calling job."
+          exit 1
+        fi
+
+        if [[ "${ACTIONS_ID_TOKEN_REQUEST_URL}" == *\?* ]]; then
+          OIDC_REQ_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://github.com/${DOWNSTREAM_REPO}"
+        else
+          OIDC_REQ_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}?audience=https://github.com/${DOWNSTREAM_REPO}"
+        fi
+
+        OIDC_TOKEN=$(
+          curl --silent --fail --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${OIDC_REQ_URL}" \
+          | python3 -c "import sys, json; print(json.load(sys.stdin)['value'])"
+        )
+
+        # ---------------------------------------------------------------------------
+        # 3. Build the JSON payload.
+        # ---------------------------------------------------------------------------
+        PAYLOAD=$(python3 - <<'PYEOF'
+        import json, os
+
+        status = os.environ["STATUS"]
+        conclusion_raw = os.environ.get("CONCLUSION", "")
+
+        payload = {
+            "head_sha":        os.environ["HEAD_SHA"],
+            "status":          status,
+            "conclusion":      conclusion_raw if status == "completed" and conclusion_raw else None,
+            "workflow_name":   os.environ["WORKFLOW_NAME"],
+            "workflow_url":    os.environ["WORKFLOW_URL"],
+            "downstream_repo": os.environ["DOWNSTREAM_REPO"],
+            "upstream_repo":   os.environ["UPSTREAM_REPO"],
+            "pr_number":       int(os.environ["PR_NUMBER"]),
+        }
+
+        run_id_raw = os.environ.get("RUN_ID", "").strip()
+        if run_id_raw:
+            try:
+                payload["run_id"] = int(run_id_raw)
+            except ValueError:
+                pass
+
+        job_id_raw = os.environ.get("JOB_ID", "").strip()
+        if job_id_raw:
+            try:
+                payload["job_id"] = int(job_id_raw)
+            except ValueError:
+                pass
+
+        print(json.dumps(payload))
+        PYEOF
+        )
+
+        # ---------------------------------------------------------------------------
+        # 4. POST the payload to the relay server.
+        # ---------------------------------------------------------------------------
+        HTTP_CODE=$(
+          curl --silent --show-error --output /tmp/relay_response.json \
+            --write-out "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OIDC_TOKEN}" \
+            --data "${PAYLOAD}" \
+            "${RELAY_URL}/github/result"
+        )
+
+        echo "Relay server response (HTTP ${HTTP_CODE}):"
+        cat /tmp/relay_response.json
+
+        if [[ "${HTTP_CODE}" -lt 200 || "${HTTP_CODE}" -ge 300 ]]; then
+          echo "::error::Relay server returned HTTP ${HTTP_CODE}."
+          exit 1
+        fi

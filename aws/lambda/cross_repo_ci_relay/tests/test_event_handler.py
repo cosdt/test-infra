@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import call, MagicMock, patch
 
-from event_handler import handle
+from webhook.event_handler import handle
 
 
 def _cfg():
@@ -9,6 +9,9 @@ def _cfg():
     cfg.github_app_id = "12345"
     cfg.github_app_private_key = "fake-key"
     cfg.max_dispatch_workers = 4
+    cfg.redis_endpoint = "host:6379"
+    cfg.redis_login = ""
+    cfg.result_callback_url = ""
     return cfg
 
 
@@ -32,9 +35,9 @@ class TestEventHandler(unittest.TestCase):
             {"ignored": True},
         )
 
-    @patch("event_handler.gh_helper.create_repository_dispatch")
-    @patch("event_handler.gh_helper.get_repo_access_token", return_value="tok")
-    @patch("event_handler.load_allowlist")
+    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
+    @patch("webhook.event_handler.gh_helper.get_repo_access_token", return_value="tok")
+    @patch("webhook.event_handler.load_allowlist")
     def test_dispatch_success(self, mock_load, _tok, mock_dispatch):
         mock_load.return_value = MagicMock(
             get_repos_at_or_above_level=MagicMock(return_value=(["org/a"], []))
@@ -43,12 +46,12 @@ class TestEventHandler(unittest.TestCase):
         self.assertTrue(result["ok"])
         mock_dispatch.assert_called_once()
 
-    @patch("event_handler.gh_helper.create_repository_dispatch")
+    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
     @patch(
-        "event_handler.gh_helper.get_repo_access_token",
+        "webhook.event_handler.gh_helper.get_repo_access_token",
         side_effect=["tok-a", "tok-b"],
     )
-    @patch("event_handler.load_allowlist")
+    @patch("webhook.event_handler.load_allowlist")
     def test_dispatch_mints_token_per_downstream_repo(
         self, mock_load, mock_get_repo_access_token, mock_dispatch
     ):
@@ -70,6 +73,36 @@ class TestEventHandler(unittest.TestCase):
             any_order=True,
         )
         self.assertEqual(mock_dispatch.call_count, 2)
+
+    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
+    @patch("webhook.event_handler.gh_helper.get_repo_access_token", return_value="tok")
+    @patch("webhook.event_handler.load_allowlist")
+    def test_callback_url_included_when_configured(
+        self, mock_load, _tok, mock_dispatch
+    ):
+        mock_load.return_value = MagicMock(
+            get_repos_at_or_above_level=MagicMock(return_value=(["org/a"], []))
+        )
+        cfg = _cfg()
+        cfg.result_callback_url = "https://relay.example.com"
+        handle(cfg, _payload(action="opened"), "pull_request", "delivery-3")
+        _, kwargs = mock_dispatch.call_args
+        self.assertEqual(
+            kwargs["client_payload"]["callback_url"], "https://relay.example.com"
+        )
+
+    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
+    @patch("webhook.event_handler.gh_helper.get_repo_access_token", return_value="tok")
+    @patch("webhook.event_handler.load_allowlist")
+    def test_callback_url_omitted_when_not_configured(
+        self, mock_load, _tok, mock_dispatch
+    ):
+        mock_load.return_value = MagicMock(
+            get_repos_at_or_above_level=MagicMock(return_value=(["org/a"], []))
+        )
+        handle(_cfg(), _payload(action="opened"), "pull_request", "delivery-4")
+        _, kwargs = mock_dispatch.call_args
+        self.assertNotIn("callback_url", kwargs["client_payload"])
 
 
 if __name__ == "__main__":
