@@ -5,7 +5,7 @@ FUNCTION_NAME := cross_repo_ci_webhook
 
 deployment.zip: clean
 	mkdir -p ./deployment
-	cp *.py ./deployment/
+	cp lambda_function.py event_handler.py ./deployment/
 	mkdir -p ./deployment/utils && cp $(UTILS_SRC) ./deployment/utils/
 	pip3 install --target ./deployment -r ../requirements.txt $(PIP_FLAGS)
 	cd deployment && zip -r ../deployment.zip .
