@@ -1,0 +1,143 @@
+name: "Report CI Result"
+description: >
+  Reports the CI job status and conclusion back to the Cross-Repo CI Relay
+  Server via POST /ci/result. Call this action both at workflow startup
+  (status=in_progress) and at the end of every job (status=completed) so the
+  relay can create and update the upstream Check Run accordingly.
+
+  The calling workflow must grant `id-token: write` permission so that GitHub
+  can issue an OIDC token used to authenticate the callback.
+
+inputs:
+  relay-server-url:
+    description: >
+      Base URL of the Relay Server without a trailing slash,
+      e.g. "https://relay.example.com".
+    required: true
+  upstream-repo:
+    description: >
+      Upstream repository in "owner/repo" form.
+      Defaults to the value forwarded in the repository_dispatch payload.
+    required: true
+    default: ${{ github.event.client_payload.upstream_repo }}
+  commit-sha:
+    description: >
+      The commit SHA this CI run targets.
+      Defaults to the value forwarded in the repository_dispatch payload.
+    required: true
+    default: ${{ github.event.client_payload.commit_sha }}
+  workflow-name:
+    description: >
+      Human-readable name used to identify this CI workflow in the upstream
+      Check Run and the OOT HUD. Defaults to the GitHub workflow name.
+    required: false
+    default: ${{ github.workflow }}
+  status:
+    description: >
+      Current job lifecycle state. Must be one of:
+        - "in_progress"   – job has started; relay creates or refreshes the
+                            upstream Check Run with status=in_progress.
+        - "completed"     – job has finished; must also set `conclusion`.
+    required: true
+  conclusion:
+    description: >
+      Final result when status=completed. Accepted values mirror GitHub
+      Check Run conclusions: success | failure | cancelled | skipped | neutral.
+      Ignored when status != "completed".
+    required: false
+    default: ""
+  url:
+    description: >
+      URL of the Actions run that produced this result. Defaults to the URL
+      of the current workflow run.
+    required: false
+    default: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+  summary:
+    description: >
+      Optional free-text summary (e.g. condensed failure log) that the relay
+      may surface in the upstream Check Run details panel.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Obtain GitHub Actions OIDC token
+      id: oidc
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+          echo "::error::ACTIONS_ID_TOKEN_REQUEST_TOKEN is not set. " \
+               "Make sure the calling workflow grants 'id-token: write' permission."
+          exit 1
+        fi
+
+        TOKEN=$(curl -sSfL \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=cross-repo-ci-relay" \
+          | python3 -c "import sys, json; print(json.load(sys.stdin)['value'])")
+
+        echo "token=${TOKEN}" >> "${GITHUB_OUTPUT}"
+
+    - name: POST result to Relay Server
+      shell: bash
+      env:
+        RELAY_SERVER_URL: ${{ inputs.relay-server-url }}
+        INPUT_UPSTREAM_REPO: ${{ inputs.upstream-repo }}
+        INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
+        INPUT_WORKFLOW_NAME: ${{ inputs.workflow-name }}
+        INPUT_STATUS: ${{ inputs.status }}
+        INPUT_CONCLUSION: ${{ inputs.conclusion }}
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+      run: |
+        set -euo pipefail
+
+        PAYLOAD=$(python3 - <<'PYEOF'
+        import json, os
+
+        data = {
+            "upstream_repo":  os.environ["INPUT_UPSTREAM_REPO"],
+            "commit_sha":     os.environ["INPUT_COMMIT_SHA"],
+            "workflow_name":  os.environ["INPUT_WORKFLOW_NAME"],
+            "status":         os.environ["INPUT_STATUS"],
+            "url":            os.environ["INPUT_URL"],
+        }
+
+        conclusion = os.environ.get("INPUT_CONCLUSION", "").strip()
+        if conclusion:
+            data["conclusion"] = conclusion
+
+        summary = os.environ.get("INPUT_SUMMARY", "").strip()
+        if summary:
+            data["summary"] = summary
+
+        print(json.dumps(data))
+        PYEOF
+        )
+
+        echo "::group::POST ${RELAY_SERVER_URL}/ci/result"
+        echo "Payload: ${PAYLOAD}"
+
+        HTTP_STATUS=$(curl -sSL \
+          -o /tmp/_relay_response.json \
+          -w "%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${OIDC_TOKEN}" \
+          "${RELAY_SERVER_URL}/ci/result" \
+          --data "${PAYLOAD}")
+
+        echo "HTTP status: ${HTTP_STATUS}"
+        echo "Response body:"
+        cat /tmp/_relay_response.json
+        echo
+        echo "::endgroup::"
+
+        if [[ "${HTTP_STATUS}" != "200" ]]; then
+          echo "::error::Relay server returned HTTP ${HTTP_STATUS} — see response body above."
+          exit 1
+        fi
