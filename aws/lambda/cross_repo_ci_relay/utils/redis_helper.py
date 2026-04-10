@@ -6,7 +6,6 @@ from urllib.parse import quote
 
 import redis as redis_lib
 from redis.exceptions import RedisError
-
 from utils.config import RelayConfig
 
 

@@ -13,10 +13,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlparse
 
-import yaml
-
 import utils.gh_helper as gh_helper
 import utils.redis_helper as redis_helper
+import yaml
 from utils.config import RelayConfig
 
 

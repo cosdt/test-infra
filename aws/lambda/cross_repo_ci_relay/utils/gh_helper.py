@@ -4,7 +4,6 @@ import logging
 
 import github
 from github import GithubIntegration
-
 from utils.types import EventDispatchPayload
 
 
