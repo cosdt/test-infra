@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from config import RelayConfig, RelaySecrets
+from utils.config import RelayConfig, RelaySecrets
 
 
 _ENV = {
@@ -11,6 +11,7 @@ _ENV = {
     "ALLOWLIST_URL": "https://github.com/o/r/blob/main/f.yaml",
     "REDIS_ENDPOINT": "cache:6379",
     "REDIS_LOGIN": "local-pass",
+    "HUD_BOT_KEY": "hud-key",
 }
 
 
@@ -27,7 +28,7 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             RelayConfig.from_env()
 
-    @patch("config.RelaySecrets.from_aws")
+    @patch("utils.config.RelaySecrets.from_aws")
     @patch.dict(
         "os.environ",
         {
