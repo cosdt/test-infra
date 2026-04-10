@@ -61,7 +61,6 @@ class RelayConfig:
     max_dispatch_workers: int
     hud_api_url: str
     hud_bot_key: str
-    result_callback_url: str
     callback_token_ttl: int
     oot_status_ttl: int
 
@@ -147,7 +146,6 @@ class RelayConfig:
             max_dispatch_workers=int(os.getenv("MAX_DISPATCH_WORKERS", "32")),
             hud_api_url=os.getenv("HUD_API_URL", ""),
             hud_bot_key=hud_bot_key,
-            result_callback_url=os.getenv("RESULT_CALLBACK_URL", ""),
             callback_token_ttl=callback_token_ttl,
             oot_status_ttl=oot_status_ttl,
         )

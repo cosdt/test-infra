@@ -107,8 +107,6 @@ def handle(
         "delivery_id": delivery_id,
         "payload": payload,
     }
-    if config.result_callback_url:
-        client_payload["callback_url"] = config.result_callback_url
     # GitHub repository_dispatch accepts at most 65 KB of JSON in client_payload.
     # We currently pass through the full webhook payload, so this size log helps
     # diagnose future failures if large pull_request events start breaching that limit.

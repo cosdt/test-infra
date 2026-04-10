@@ -5,7 +5,6 @@ import logging
 import urllib.error
 import urllib.request
 
-import jwt
 import utils.redis_helper as redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
@@ -13,40 +12,13 @@ from utils.types import (
     HTTPException,
     OOTStatusRecord,
     ResultCallbackPayload,
-    VALID_CONCLUSIONS,
-    VALID_STATUSES,
 )
 
 
 logger = logging.getLogger(__name__)
 
-_jwks_client = jwt.PyJWKClient(
-    "https://token.actions.githubusercontent.com/.well-known/jwks.json"
-)
-
-
-def verify_github_oidc_token(token: str, expected_repo: str) -> None:
-    try:
-        if token.lower().startswith("bearer "):
-            token = token[7:].strip()
-
-        signing_key = _jwks_client.get_signing_key_from_jwt(token)
-        data = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            issuer="https://token.actions.githubusercontent.com",
-        )
-        if data.get("repository") != expected_repo:
-            logger.error(
-                "OIDC token repository mismatch: expected %s, got %s",
-                expected_repo,
-                data.get("repository"),
-            )
-            raise HTTPException(401, "Invalid authorization token: repository mismatch")
-    except Exception as exc:
-        logger.exception("OIDC token verification error")
-        raise HTTPException(401, "Invalid authorization token") from exc
+VALID_STATUSES = frozenset({"in_progress", "completed"})
+VALID_CONCLUSIONS = frozenset({"success", "failure"})
 
 
 def validate_payload(body: dict) -> ResultCallbackPayload:
@@ -108,10 +80,7 @@ def validate_payload(body: dict) -> ResultCallbackPayload:
     return payload
 
 
-def handle(config: RelayConfig, token: str, payload: dict) -> dict:
-    if not token:
-        raise HTTPException(401, "Missing authorization token")
-
+def handle(config: RelayConfig, payload: dict) -> dict:
     cb_payload = validate_payload(payload)
 
     allowlist = load_allowlist(config)
@@ -123,8 +92,6 @@ def handle(config: RelayConfig, token: str, payload: dict) -> dict:
             cb_payload["downstream_repo"],
         )
         return {"ok": True, "status": "ignored"}
-
-    verify_github_oidc_token(token, cb_payload["downstream_repo"])
 
     _REDIS_ERROR = object()  # sentinel: Redis unavailable, state unknown
     try:

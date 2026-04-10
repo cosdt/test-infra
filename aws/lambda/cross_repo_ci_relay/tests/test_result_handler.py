@@ -117,9 +117,6 @@ class TestResultHandler(unittest.TestCase):
         mock_allowlist_map.get_repos_at_or_above_level.return_value = (["org/repo"], [])
         self.mock_load_allowlist.return_value = mock_allowlist_map
 
-        self.patcher_oidc = patch("result.result_handler.verify_github_oidc_token")
-        self.mock_verify_oidc = self.patcher_oidc.start()
-
         # By default, simulate an existing in_progress record in Redis
         # so that completed callbacks are accepted in the happy-path tests.
         self.patcher_redis = patch("result.result_handler.redis_helper")
@@ -132,44 +129,34 @@ class TestResultHandler(unittest.TestCase):
 
     def tearDown(self):
         self.patcher_allowlist.stop()
-        self.patcher_oidc.stop()
         self.patcher_redis.stop()
 
     @patch("result.result_handler._write_to_hud")
     def test_happy_path_completed(self, mock_hud):
-        result = handle(_cfg(), "tok", _payload())
+        result = handle(_cfg(), _payload())
         self.assertEqual(result, {"ok": True, "status": "completed"})
         self.assertTrue(self.mock_redis.set_oot_status.called)
         self.assertTrue(mock_hud.called)
-        self.mock_verify_oidc.assert_called_once_with("tok", "org/repo")
 
     @patch("result.result_handler._write_to_hud")
     def test_happy_path_in_progress(self, mock_hud):
         # in_progress does not require a pre-existing record
         self.mock_redis.get_oot_status.return_value = None
-        result = handle(_cfg(), "tok", _payload(status="in_progress", conclusion=None))
+        result = handle(_cfg(), _payload(status="in_progress", conclusion=None))
         self.assertEqual(result["status"], "in_progress")
         self.assertEqual(result["ok"], True)
-        self.mock_verify_oidc.assert_called_once_with("tok", "org/repo")
-
-    @patch("result.result_handler._write_to_hud")
-    def test_invalid_token(self, mock_hud):
-        self.mock_verify_oidc.side_effect = HTTPException(401, "Invalid token")
-        with self.assertRaises(HTTPException) as ctx:
-            handle(_cfg(), "bad-tok", _payload())
-        self.assertEqual(ctx.exception.status_code, 401)
 
     @patch("result.result_handler._write_to_hud")
     def test_hud_write_failure_does_not_raise(self, mock_hud):
         mock_hud.side_effect = Exception("HUD down")
-        result = handle(_cfg(), "tok", _payload())
+        result = handle(_cfg(), _payload())
         self.assertEqual(result, {"ok": True, "status": "completed"})
 
     @patch("result.result_handler._write_to_hud")
     def test_redis_oot_write_failure_does_not_raise(self, mock_hud):
         self.mock_redis.set_oot_status.side_effect = Exception("Redis down")
         # set_oot_status is best-effort: exception must NOT propagate
-        result = handle(_cfg(), "tok", _payload())
+        result = handle(_cfg(), _payload())
         self.assertEqual(result, {"ok": True, "status": "completed"})
 
     @patch("result.result_handler._write_to_hud")
@@ -181,7 +168,7 @@ class TestResultHandler(unittest.TestCase):
         )
         self.mock_load_allowlist.return_value = mock_allowlist_map
 
-        result = handle(_cfg(), "tok", _payload())
+        result = handle(_cfg(), _payload())
         self.assertEqual(result, {"ok": True, "status": "ignored"})
         self.assertFalse(self.mock_redis.set_oot_status.called)
         self.assertFalse(mock_hud.called)
@@ -191,7 +178,7 @@ class TestResultHandler(unittest.TestCase):
         """completed is rejected when no in_progress record exists in Redis."""
         self.mock_redis.get_oot_status.return_value = None
         with self.assertRaises(HTTPException) as ctx:
-            handle(_cfg(), "tok", _payload(status="completed", conclusion="success"))
+            handle(_cfg(), _payload(status="completed", conclusion="success"))
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertFalse(self.mock_redis.set_oot_status.called)
         self.assertFalse(mock_hud.called)
@@ -201,7 +188,7 @@ class TestResultHandler(unittest.TestCase):
         """A second completed callback is rejected when Redis already shows completed."""
         self.mock_redis.get_oot_status.return_value = {"status": "completed"}
         with self.assertRaises(HTTPException) as ctx:
-            handle(_cfg(), "tok", _payload(status="completed", conclusion="success"))
+            handle(_cfg(), _payload(status="completed", conclusion="success"))
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertFalse(self.mock_redis.set_oot_status.called)
 
@@ -212,9 +199,7 @@ class TestResultHandler(unittest.TestCase):
         due to infrastructure issues."""
         # Simulate create_client raising
         self.mock_redis.create_client.side_effect = Exception("Redis unreachable")
-        result = handle(
-            _cfg(), "tok", _payload(status="completed", conclusion="success")
-        )
+        result = handle(_cfg(), _payload(status="completed", conclusion="success"))
         self.assertEqual(result, {"ok": True, "status": "completed"})
 
     @patch("result.result_handler._write_to_hud")
@@ -223,9 +208,7 @@ class TestResultHandler(unittest.TestCase):
         from redis.exceptions import RedisError as _RedisError
 
         self.mock_redis.get_oot_status.side_effect = _RedisError("timeout")
-        result = handle(
-            _cfg(), "tok", _payload(status="completed", conclusion="success")
-        )
+        result = handle(_cfg(), _payload(status="completed", conclusion="success"))
         self.assertEqual(result, {"ok": True, "status": "completed"})
 
 

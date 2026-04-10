@@ -11,7 +11,6 @@ def _cfg():
     cfg.max_dispatch_workers = 4
     cfg.redis_endpoint = "host:6379"
     cfg.redis_login = ""
-    cfg.result_callback_url = ""
     return cfg
 
 
@@ -73,37 +72,6 @@ class TestEventHandler(unittest.TestCase):
             any_order=True,
         )
         self.assertEqual(mock_dispatch.call_count, 2)
-
-    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
-    @patch("webhook.event_handler.gh_helper.get_repo_access_token", return_value="tok")
-    @patch("webhook.event_handler.load_allowlist")
-    def test_callback_url_included_when_configured(
-        self, mock_load, _tok, mock_dispatch
-    ):
-        mock_load.return_value = MagicMock(
-            get_repos_at_or_above_level=MagicMock(return_value=(["org/a"], []))
-        )
-        cfg = _cfg()
-        cfg.result_callback_url = "https://relay.example.com"
-        handle(cfg, _payload(action="opened"), "pull_request", "delivery-3")
-        _, kwargs = mock_dispatch.call_args
-        self.assertEqual(
-            kwargs["client_payload"]["callback_url"], "https://relay.example.com"
-        )
-
-    @patch("webhook.event_handler.gh_helper.create_repository_dispatch")
-    @patch("webhook.event_handler.gh_helper.get_repo_access_token", return_value="tok")
-    @patch("webhook.event_handler.load_allowlist")
-    def test_callback_url_omitted_when_not_configured(
-        self, mock_load, _tok, mock_dispatch
-    ):
-        mock_load.return_value = MagicMock(
-            get_repos_at_or_above_level=MagicMock(return_value=(["org/a"], []))
-        )
-        handle(_cfg(), _payload(action="opened"), "pull_request", "delivery-4")
-        _, kwargs = mock_dispatch.call_args
-        self.assertNotIn("callback_url", kwargs["client_payload"])
-
 
 if __name__ == "__main__":
     unittest.main()

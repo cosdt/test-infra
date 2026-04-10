@@ -11,7 +11,6 @@ class EventDispatchPayload(TypedDict):
     event_type: str
     delivery_id: str
     payload: dict
-    callback_url: NotRequired[str]
 
 
 class ResultCallbackPayload(TypedDict):
@@ -38,7 +37,3 @@ class OOTStatusRecord(TypedDict):
     workflow_url: str
     run_id: NotRequired[int]
     job_id: NotRequired[int]
-
-
-VALID_STATUSES = frozenset({"in_progress", "completed"})
-VALID_CONCLUSIONS = frozenset({"success", "failure"})

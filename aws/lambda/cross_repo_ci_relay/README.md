@@ -44,15 +44,11 @@ composite action.
   allowlist.
 - The **calling job** must declare `permissions: id-token: write` so that the
   action can mint a GitHub OIDC token for authentication.
-- The relay Lambda must be configured with `RESULT_CALLBACK_URL` pointing to
-  its own result endpoint (e.g. `https://relay.example.com`).  The webhook
-  handler injects this URL into every `repository_dispatch` payload as
-  `client_payload.callback_url`, which the action reads automatically.
 
 ### Usage
 
 When triggered by a relay `repository_dispatch`, `pr-number`, `head-sha`,
-`upstream-repo`, and `relay-url` are **automatically resolved** from
+and `upstream-repo` are **automatically resolved** from
 `github.event.client_payload` — only `status` (and `conclusion` for the
 final report) need to be provided explicitly.
 
@@ -89,7 +85,6 @@ jobs:
 |---|---|---|---|
 | `status` | **yes** | — | `in_progress` or `completed` |
 | `conclusion` | no | `''` | `success` or `failure` (required when `status=completed`) |
-| `relay-url` | no | `client_payload.callback_url` | Base URL of the relay server |
 | `upstream-repo` | no | `client_payload.payload.repository.full_name` | Upstream repo in `owner/repo` form |
 | `pr-number` | no | `client_payload.payload.number` | PR number in the upstream repo |
 | `head-sha` | no | `client_payload.payload.pull_request.head.sha` | Commit SHA being reported on |

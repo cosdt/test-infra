@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 
+import jwt
 from utils.config import RelayConfig
 from utils.types import HTTPException
 
@@ -18,8 +19,39 @@ logger = logging.getLogger(__name__)
 
 _cached_config: RelayConfig | None = None
 
+_jwks_client = jwt.PyJWKClient(
+    "https://token.actions.githubusercontent.com/.well-known/jwks.json"
+)
+
 
 _JSON_HEADERS = {"content-type": "application/json"}
+
+
+def _verify_github_oidc_token(token: str, expected_repo: str) -> None:
+    try:
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
+        data = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            issuer="https://token.actions.githubusercontent.com",
+            options={"verify_audience": False},
+        )
+        if data.get("repository") != expected_repo:
+            logger.error(
+                "OIDC token repository mismatch: expected %s, got %s",
+                expected_repo,
+                data.get("repository"),
+            )
+            raise HTTPException(401, "Invalid authorization token")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("OIDC token verification error")
+        raise HTTPException(401, "Invalid authorization token") from exc
 
 
 def _get_config() -> RelayConfig:
@@ -61,7 +93,10 @@ def lambda_handler(event, context):
         config = _get_config()
         token = headers.get("authorization", "")
         payload = json.loads(body_bytes) if body_bytes else {}
-        result = result_handler.handle(config, token, payload)
+        if not token:
+            raise HTTPException(401, "Missing authorization token")
+        _verify_github_oidc_token(token, payload["downstream_repo"])
+        result = result_handler.handle(config, payload)
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
 
     except json.JSONDecodeError:
