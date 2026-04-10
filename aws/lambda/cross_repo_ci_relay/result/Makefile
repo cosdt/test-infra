@@ -13,10 +13,7 @@ deployment.zip: clean
 deploy: deployment.zip
 	aws lambda update-function-code --region $(AWS_REGION) --function-name $(FUNCTION_NAME) --zip-file fileb://deployment.zip
 
-test:
-	PYTHONPATH=.. python3 -m pytest ../tests/ -v
-
 clean:
 	rm -rf deployment deployment.zip
 
-.PHONY: deploy test clean
+.PHONY: deploy clean

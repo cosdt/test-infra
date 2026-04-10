@@ -102,14 +102,21 @@ jobs:
 
 ### Make Targets
 
-Build the Lambda zip (output: deployment.zip)
+Build the Webhook Lambda zip (output: deployment.zip)
 ```bash
+cd webhook
 make deployment.zip
 ```
 
-Deploy to AWS Lambda (requires AWS CLI v2 configured with permissions)
+Build the Result Lambda zip (output: deployment.zip)
 ```bash
-make deploy AWS_REGION=us-east-1 FUNCTION_NAME=crcr-prod-crcr-webhook
+cd result
+make deployment.zip
+```
+
+Deploy both zip to AWS Lambda (requires AWS CLI v2 configured with permissions)
+```bash
+make deploy AWS_REGION=us-east-1 WEBHOOK_FUNCTION_NAME=cross_repo_ci_webhook RESULT_FUNCTION_NAME=cross_repo_ci_result
 ```
 
 Run all unit tests under tests/ folder
