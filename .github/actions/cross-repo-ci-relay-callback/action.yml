@@ -79,11 +79,11 @@ runs:
     - name: Send callback to relay server
       shell: bash
       env:
-        RELAY_URL: ${{ github.event.client_payload.callback_url }}
-        UPSTREAM_REPO: ${{ github.event.client_payload.payload.repository.full_name }}
+        RELAY_URL: ${{ inputs.relay-url }}
+        UPSTREAM_REPO: ${{ inputs.upstream-repo }}
         DOWNSTREAM_REPO: ${{ github.repository }}
-        PR_NUMBER: ${{ github.event.client_payload.payload.number }}
-        HEAD_SHA: ${{ github.event.client_payload.payload.pull_request.head.sha }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
         STATUS: ${{ inputs.status }}
         CONCLUSION: ${{ inputs.conclusion }}
         WORKFLOW_NAME: ${{ inputs.workflow-name }}
@@ -148,7 +148,7 @@ runs:
             "downstream_repo": os.environ["DOWNSTREAM_REPO"],
             "upstream_repo":   os.environ["UPSTREAM_REPO"],
             "pr_number":       int(os.environ["PR_NUMBER"]),
-          "callback_token":  os.environ["CALLBACK_TOKEN"],
+            "callback_token":  os.environ["CALLBACK_TOKEN"],
         }
 
         run_id_raw = os.environ.get("RUN_ID", "").strip()
