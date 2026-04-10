@@ -27,11 +27,48 @@ _jwks_client = jwt.PyJWKClient(
 _JSON_HEADERS = {"content-type": "application/json"}
 
 
+def _verify_callback_token(config: RelayConfig, token: str, payload: dict) -> None:
+    # This token is minted by the webhook lambda and passed through the
+    # downstream workflow, so it proves the callback belongs to a relay-issued
+    # dispatch rather than an arbitrary external request.
+    if not token:
+        raise HTTPException(401, "Missing callback token")
+
+    try:
+        claims = jwt.decode(token, config.github_app_secret, algorithms=["HS256"])
+    except Exception as exc:
+        logger.exception("Callback token verification error")
+        raise HTTPException(401, "Invalid callback token") from exc
+
+    expected_pairs = {
+        "downstream_repo": payload.get("downstream_repo"),
+        "upstream_repo": payload.get("upstream_repo"),
+        "head_sha": payload.get("head_sha"),
+    }
+
+    if payload.get("pr_number") is not None:
+        expected_pairs["pr_number"] = int(payload["pr_number"])
+
+    for key, expected in expected_pairs.items():
+        if expected is None:
+            continue
+        if claims.get(key) != expected:
+            logger.error(
+                "Callback token claim mismatch for %s: expected %s, got %s",
+                key,
+                expected,
+                claims.get(key),
+            )
+            raise HTTPException(401, "Invalid callback token")
+
+
 def _verify_github_oidc_token(token: str, expected_repo: str) -> None:
     try:
         if token.lower().startswith("bearer "):
             token = token[7:].strip()
 
+        # GitHub signs the OIDC token with its own keypair; here we only need
+        # to verify that the caller is the expected downstream repository.
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
         data = jwt.decode(
             token,
@@ -95,6 +132,9 @@ def lambda_handler(event, context):
         payload = json.loads(body_bytes) if body_bytes else {}
         if not token:
             raise HTTPException(401, "Missing authorization token")
+        # The callback token ties the payload back to the relay dispatch, while
+        # the OIDC token proves which GitHub Actions workflow is calling us.
+        _verify_callback_token(config, payload.get("callback_token", ""), payload)
         _verify_github_oidc_token(token, payload["downstream_repo"])
         result = result_handler.handle(config, payload)
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}

@@ -11,6 +11,7 @@ class EventDispatchPayload(TypedDict):
     event_type: str
     delivery_id: str
     payload: dict
+    callback_token: NotRequired[str]
 
 
 class ResultCallbackPayload(TypedDict):
@@ -22,6 +23,7 @@ class ResultCallbackPayload(TypedDict):
     downstream_repo: str
     upstream_repo: str
     pr_number: int
+    callback_token: NotRequired[str]
     run_id: NotRequired[int]
     job_id: NotRequired[int]
 

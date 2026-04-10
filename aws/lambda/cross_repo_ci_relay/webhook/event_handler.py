@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
+import jwt
 from utils import gh_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
@@ -14,6 +16,30 @@ logger = logging.getLogger(__name__)
 _PULL_REQUEST_ALLOW_ACTIONS = frozenset({"opened", "reopened", "synchronize", "closed"})
 
 
+def _build_callback_token(
+    *,
+    config: RelayConfig,
+    downstream_repo: str,
+    delivery_id: str,
+    payload: dict,
+) -> str:
+    pull_request = payload.get("pull_request") or {}
+    head = pull_request.get("head") or {}
+    now = int(time.time())
+    claims = {
+        "downstream_repo": downstream_repo,
+        "upstream_repo": (payload.get("repository") or {}).get("full_name", ""),
+        "head_sha": head.get("sha", ""),
+        "delivery_id": delivery_id,
+        "iat": now,
+        "exp": now + config.callback_token_ttl,
+    }
+    pr_number = pull_request.get("number")
+    if pr_number is not None:
+        claims["pr_number"] = pr_number
+    return jwt.encode(claims, config.github_app_secret, algorithm="HS256")
+
+
 def _dispatch_one(
     *,
     config: RelayConfig,
@@ -21,6 +47,13 @@ def _dispatch_one(
     event_type: str,
     client_payload: EventDispatchPayload,
 ) -> None:
+    dispatch_payload = dict(client_payload)
+    dispatch_payload["callback_token"] = _build_callback_token(
+        config=config,
+        downstream_repo=downstream_repo,
+        delivery_id=client_payload["delivery_id"],
+        payload=client_payload["payload"],
+    )
     installation_token = gh_helper.get_repo_access_token(
         config.github_app_id,
         config.github_app_private_key,
@@ -30,7 +63,7 @@ def _dispatch_one(
         token=installation_token,
         repo_full_name=downstream_repo,
         event_type=event_type,
-        client_payload=client_payload,
+        client_payload=dispatch_payload,
     )
 
 

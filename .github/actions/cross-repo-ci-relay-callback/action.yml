@@ -10,6 +10,29 @@ description: >
   `github.event.client_payload`.
 
 inputs:
+  relay-url:
+    description: >
+      Base URL of the relay server.
+    required: true
+  upstream-repo:
+    description: >
+      The upstream repository in "owner/repo" form that owns the PR being
+      reported on (e.g. pytorch/pytorch).  Defaults to the sender repository
+      field from the relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.repository.full_name }}
+  pr-number:
+    description: >
+      Pull-request number in the upstream repository.  Defaults to the PR
+      number from the relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.number }}
+  head-sha:
+    description: >
+      The commit SHA being reported on.  Defaults to the head SHA from the
+      relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.payload.pull_request.head.sha }}
   status:
     description: >
       Workflow status to report.  Must be either "in_progress" or "completed".
@@ -31,6 +54,10 @@ inputs:
       the current run.
     required: false
     default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  callback-token:
+    description: Callback token from the relay dispatch payload.
+    required: false
+    default: ${{ github.event.client_payload.callback_token }}
   run-id:
     description: >
       Numeric GitHub Actions workflow run ID.  Defaults to the current run ID.
@@ -61,6 +88,7 @@ runs:
         CONCLUSION: ${{ inputs.conclusion }}
         WORKFLOW_NAME: ${{ inputs.workflow-name }}
         WORKFLOW_URL: ${{ inputs.workflow-url }}
+        CALLBACK_TOKEN: ${{ inputs.callback-token }}
         RUN_ID: ${{ inputs.run-id }}
         JOB_ID: ${{ inputs.job-id }}
         ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
@@ -71,14 +99,7 @@ runs:
         # ---------------------------------------------------------------------------
         # 1. Validate required runtime values that come from dispatch payload defaults.
         # ---------------------------------------------------------------------------
-        if [[ -z "${RELAY_URL:-}" ]]; then
-          echo "::error::relay-url is empty. Either pass it explicitly or ensure the" \
-               "workflow is triggered by a relay repository_dispatch that includes" \
-               "client_payload.callback_url."
-          exit 1
-        fi
-
-        for var in UPSTREAM_REPO PR_NUMBER HEAD_SHA STATUS; do
+        for var in RELAY_URL UPSTREAM_REPO PR_NUMBER HEAD_SHA STATUS CALLBACK_TOKEN; do
           if [[ -z "${!var:-}" ]]; then
             echo "::error::Required input '${var}' is empty. Pass it explicitly or" \
                  "ensure the workflow is triggered by a relay repository_dispatch."
@@ -127,6 +148,7 @@ runs:
             "downstream_repo": os.environ["DOWNSTREAM_REPO"],
             "upstream_repo":   os.environ["UPSTREAM_REPO"],
             "pr_number":       int(os.environ["PR_NUMBER"]),
+          "callback_token":  os.environ["CALLBACK_TOKEN"],
         }
 
         run_id_raw = os.environ.get("RUN_ID", "").strip()
