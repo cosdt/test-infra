@@ -1,21 +1,21 @@
-SHARED := config.py utils.py redis_helper.py allowlist.py gh_helper.py event_handler.py
-PIP_FLAGS := --platform manylinux2014_x86_64 --only-binary=:all: --implementation cp --python-version 3.13
-AWS_REGION := us-east-1
-FUNCTION_NAME := cross_repo_ci_webhook
-
-deployment.zip: clean
-	mkdir -p ./deployment
-	cp $(SHARED) lambda_function.py ./deployment/
-	pip3 install --target ./deployment -r requirements.txt $(PIP_FLAGS)
-	cd deployment && zip -r ../deployment.zip .
-
-deploy: deployment.zip
-	aws lambda update-function-code --region $(AWS_REGION) --function-name $(FUNCTION_NAME) --zip-file fileb://deployment.zip
+RESULT_DIR := result
+WEBHOOK_DIR := webhook
+RESULT_FUNCTION_NAME ?= cross_repo_ci_result
+WEBHOOK_FUNCTION_NAME ?= cross_repo_ci_webhook
+AWS_REGION ?= us-east-1
 
 test:
 	python3 -m pytest tests -v
 
-clean:
-	rm -rf deployment deployment.zip
+deploy:
+	@status=0; \
+	$(MAKE) -C $(RESULT_DIR) deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(RESULT_FUNCTION_NAME) || status=$$?; \
+	$(MAKE) -C $(WEBHOOK_DIR) deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(WEBHOOK_FUNCTION_NAME) || status=$$?; \
+	exit $$status
 
-.PHONY: prepare deploy test clean
+clean:
+	$(MAKE) -C $(RESULT_DIR) clean
+	$(MAKE) -C $(WEBHOOK_DIR) clean
+	rm -rf .pytest_cache __pycache__ result/__pycache__ webhook/__pycache__ utils/__pycache__ tests/__pycache__
+
+.PHONY: test deploy clean

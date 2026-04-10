@@ -1,9 +1,12 @@
+import json
 import logging
 import os
+from typing import cast
 from urllib.parse import quote
 
 import redis as redis_lib
-from config import RelayConfig
+from redis.exceptions import RedisError
+from utils.config import RelayConfig
 
 
 logger = logging.getLogger(__name__)
@@ -95,8 +98,8 @@ def get_cached_yaml(
         value = client.get(_ALLOWLIST_CACHE_KEY)
         if value is not None:
             logger.info("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
-        return value
-    except redis_lib.exceptions.RedisError as exc:
+        return cast(str | None, value)
+    except RedisError as exc:
         error_message = str(exc)
         logger.warning(
             "redis cache read failed, falling back to source: %s",
@@ -116,9 +119,55 @@ def set_cached_yaml(
         logger.info(
             "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
         )
-    except redis_lib.exceptions.RedisError as exc:
+    except RedisError as exc:
         error_message = str(exc)
         logger.warning(
             "redis cache write failed, continuing without cache: %s",
             error_message,
         )
+
+
+# --- OOT status caching ---
+
+_OOT_STATUS_PREFIX = "crcr:oot:"
+
+
+def set_oot_status(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    data: dict,
+    client: redis_lib.Redis | None = None,
+) -> None:
+    """Cache OOT status for a downstream repo + sha. Best-effort — logs and ignores Redis errors."""
+    try:
+        if client is None:
+            client = create_client(config)
+        owner, repo_name = downstream_repo.split("/", 1)
+        key = _OOT_STATUS_PREFIX + owner + ":" + repo_name + ":" + head_sha
+        client.setex(key, config.oot_status_ttl, json.dumps(data))
+        logger.info("oot status cached key=%s", key)
+    except RedisError as exc:
+        error_message = str(exc)
+        logger.warning(
+            "redis oot status write failed: %s",
+            error_message,
+        )
+
+
+def get_oot_status(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    client: redis_lib.Redis | None = None,
+) -> dict | None:
+    """Return cached OOT status, or None on cache miss.  Re-raises RedisError so
+    callers can detect infrastructure failures and apply fail-open logic."""
+    if client is None:
+        client = create_client(config)
+    owner, repo_name = downstream_repo.split("/", 1)
+    key = _OOT_STATUS_PREFIX + owner + ":" + repo_name + ":" + head_sha
+    value = client.get(key)
+    if value is None:
+        return None
+    return json.loads(cast(str, value))
