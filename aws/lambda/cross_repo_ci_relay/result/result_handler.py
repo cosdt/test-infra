@@ -8,11 +8,7 @@ import urllib.request
 import utils.redis_helper as redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
-from utils.types import (
-    HTTPException,
-    OOTStatusRecord,
-    ResultCallbackPayload,
-)
+from utils.types import HTTPException, OOTStatusRecord, ResultCallbackPayload
 
 
 logger = logging.getLogger(__name__)

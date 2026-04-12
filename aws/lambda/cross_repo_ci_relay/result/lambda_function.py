@@ -12,7 +12,7 @@ from utils.types import HTTPException
 try:
     from . import result_handler
 except ImportError:
-    import result_handler
+    import result_handler  # type: ignore[no-redef]
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)

@@ -11,6 +11,8 @@ def _cfg():
     cfg.max_dispatch_workers = 4
     cfg.redis_endpoint = "host:6379"
     cfg.redis_login = ""
+    cfg.callback_token_ttl = 3600
+    cfg.github_app_secret = "test-secret"
     return cfg
 
 
@@ -72,6 +74,7 @@ class TestEventHandler(unittest.TestCase):
             any_order=True,
         )
         self.assertEqual(mock_dispatch.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

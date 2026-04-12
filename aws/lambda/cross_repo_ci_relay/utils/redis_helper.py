@@ -6,7 +6,8 @@ from urllib.parse import quote
 
 import redis as redis_lib
 from redis.exceptions import RedisError
-from utils.config import RelayConfig
+
+from .config import RelayConfig
 
 
 logger = logging.getLogger(__name__)

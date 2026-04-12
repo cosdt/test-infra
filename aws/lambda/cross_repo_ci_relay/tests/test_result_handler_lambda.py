@@ -54,9 +54,12 @@ class TestResultLambdaFunction(unittest.TestCase):
         self.assertFalse(mock_verify_oidc.called)
 
     @patch("result.lambda_function._get_config")
+    @patch("result.lambda_function._verify_callback_token")
     @patch("result.lambda_function._verify_github_oidc_token")
     @patch("result.lambda_function.result_handler")
-    def test_http_exception(self, mock_handler, mock_verify_oidc, mock_get_config):
+    def test_http_exception(
+        self, mock_handler, mock_verify_oidc, mock_verify_callback, mock_get_config
+    ):
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/github/result"}},
             "headers": {"authorization": "tok"},
@@ -71,10 +74,16 @@ class TestResultLambdaFunction(unittest.TestCase):
 
     @patch("result.lambda_function.logger")
     @patch("result.lambda_function._get_config")
+    @patch("result.lambda_function._verify_callback_token")
     @patch("result.lambda_function._verify_github_oidc_token")
     @patch("result.lambda_function.result_handler")
     def test_unhandled_exception(
-        self, mock_handler, mock_verify_oidc, mock_get_config, mock_logger
+        self,
+        mock_handler,
+        mock_verify_oidc,
+        mock_verify_callback,
+        mock_get_config,
+        mock_logger,
     ):
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/github/result"}},
@@ -92,9 +101,12 @@ class TestResultLambdaFunction(unittest.TestCase):
         self.assertTrue(mock_logger.exception.called)
 
     @patch("result.lambda_function._get_config")
+    @patch("result.lambda_function._verify_callback_token")
     @patch("result.lambda_function._verify_github_oidc_token")
     @patch("result.lambda_function.result_handler")
-    def test_happy_path(self, mock_handler, mock_verify_oidc, mock_get_config):
+    def test_happy_path(
+        self, mock_handler, mock_verify_oidc, mock_verify_callback, mock_get_config
+    ):
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/github/result"}},
             "headers": {"authorization": "tok"},
@@ -114,10 +126,11 @@ class TestResultLambdaFunction(unittest.TestCase):
         )
 
     @patch("result.lambda_function._get_config")
+    @patch("result.lambda_function._verify_callback_token")
     @patch("result.lambda_function._verify_github_oidc_token")
     @patch("result.lambda_function.result_handler")
     def test_base64_encoded_body(
-        self, mock_handler, mock_verify_oidc, mock_get_config
+        self, mock_handler, mock_verify_oidc, mock_verify_callback, mock_get_config
     ):
         import base64
 
@@ -142,7 +155,9 @@ class TestResultLambdaFunction(unittest.TestCase):
     @patch("result.lambda_function._get_config")
     @patch("result.lambda_function._verify_github_oidc_token")
     @patch("result.lambda_function.result_handler")
-    def test_missing_authorization(self, mock_handler, mock_verify_oidc, mock_get_config):
+    def test_missing_authorization(
+        self, mock_handler, mock_verify_oidc, mock_get_config
+    ):
         event = {
             "requestContext": {"http": {"method": "POST", "path": "/github/result"}},
             "body": '{"status": "completed", "downstream_repo": "org/repo"}',
@@ -150,6 +165,8 @@ class TestResultLambdaFunction(unittest.TestCase):
         }
         response = lambda_handler(event, {})
         self.assertEqual(response["statusCode"], 401)
-        self.assertEqual(json.loads(response["body"])["detail"], "Missing authorization token")
+        self.assertEqual(
+            json.loads(response["body"])["detail"], "Missing authorization token"
+        )
         self.assertFalse(mock_verify_oidc.called)
         self.assertFalse(mock_handler.handle.called)
