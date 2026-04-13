@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _cached_config: RelayConfig | None = None
 
 _jwks_client = jwt.PyJWKClient(
-    "https://token.actions.githubusercontent.com/.well-known/jwks.json"
+    "https://token.actions.githubusercontent.com/.well-known/jwks"
 )
 
 
@@ -76,7 +76,7 @@ def _verify_github_oidc_token(config: RelayConfig, token: str) -> None:
             signing_key.key,
             algorithms=["RS256"],
             issuer="https://token.actions.githubusercontent.com",
-            options={"verify_audience": False},
+            options={"verify_aud": False},
         )
         repo = data.get("repository")
         allowlist = load_allowlist(config)
