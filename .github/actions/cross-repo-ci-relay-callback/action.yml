@@ -46,7 +46,7 @@ runs:
       shell: bash
       env:
         # TODO: update once the relay Lambda Function URL is provisioned.
-        RELAY_URL: https://smee.io/FYIELaMU9gILwrNv
+        RELAY_URL: https://smee.io/FYIELaMU9gILwrNv/github/result
         STATUS: ${{ inputs.status }}
         CONCLUSION: ${{ inputs.conclusion }}
         TEST_RESULTS: ${{ inputs.test-results }}
