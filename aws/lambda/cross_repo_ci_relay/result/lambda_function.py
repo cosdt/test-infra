@@ -5,6 +5,7 @@ import json
 import logging
 
 import jwt
+from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
 from utils.types import HTTPException
 
@@ -62,13 +63,13 @@ def _verify_callback_token(config: RelayConfig, token: str, payload: dict) -> No
             raise HTTPException(401, "Invalid callback token")
 
 
-def _verify_github_oidc_token(token: str, expected_repo: str) -> None:
+def _verify_github_oidc_token(config: RelayConfig, token: str) -> None:
     try:
         if token.lower().startswith("bearer "):
             token = token[7:].strip()
 
         # GitHub signs the OIDC token with its own keypair; here we only need
-        # to verify that the caller is the expected downstream repository.
+        # to verify that the caller is an allowlisted downstream repository.
         signing_key = _jwks_client.get_signing_key_from_jwt(token)
         data = jwt.decode(
             token,
@@ -77,11 +78,13 @@ def _verify_github_oidc_token(token: str, expected_repo: str) -> None:
             issuer="https://token.actions.githubusercontent.com",
             options={"verify_audience": False},
         )
-        if data.get("repository") != expected_repo:
+        repo = data.get("repository")
+        allowlist = load_allowlist(config)
+        allowed_repos, _ = allowlist.get_repos_at_or_above_level(AllowlistLevel.L2)
+        if repo not in allowed_repos:
             logger.error(
-                "OIDC token repository mismatch: expected %s, got %s",
-                expected_repo,
-                data.get("repository"),
+                "OIDC token repository not in allowlist: %s",
+                repo,
             )
             raise HTTPException(401, "Invalid authorization token")
     except HTTPException:
@@ -135,7 +138,7 @@ def lambda_handler(event, context):
         # The callback token ties the payload back to the relay dispatch, while
         # the OIDC token proves which GitHub Actions workflow is calling us.
         _verify_callback_token(config, payload.get("callback_token", ""), payload)
-        _verify_github_oidc_token(token, payload["downstream_repo"])
+        _verify_github_oidc_token(config, token)
         result = result_handler.handle(config, payload)
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
 

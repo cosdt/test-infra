@@ -73,17 +73,20 @@ def create_client(config: RelayConfig) -> redis_lib.Redis:
     """Create or reuse a Redis client for the given config."""
     global _cached_client
     global _cached_client_url
+    try:
+        redis_url = _build_url(config)
+        if _cached_client is not None and _cached_client_url == redis_url:
+            return _cached_client
 
-    redis_url = _build_url(config)
-    if _cached_client is not None and _cached_client_url == redis_url:
-        return _cached_client
-
-    client = redis_lib.from_url(
-        redis_url,
-        decode_responses=True,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
+        client = redis_lib.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+    except Exception:
+        logger.exception("Error creating Redis client")
+        raise RuntimeError("Failed to create Redis client")
     _cached_client = client
     _cached_client_url = redis_url
     return client
@@ -100,11 +103,9 @@ def get_cached_yaml(
         if value is not None:
             logger.info("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
         return cast(str | None, value)
-    except RedisError as exc:
-        error_message = str(exc)
-        logger.warning(
-            "redis cache read failed, falling back to source: %s",
-            error_message,
+    except RedisError:
+        logger.exception(
+            "redis cache read failed, falling back to source",
         )
         return None
 
@@ -120,17 +121,14 @@ def set_cached_yaml(
         logger.info(
             "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
         )
-    except RedisError as exc:
-        error_message = str(exc)
-        logger.warning(
-            "redis cache write failed, continuing without cache: %s",
-            error_message,
-        )
+    except RedisError:
+        logger.exception("redis cache write failed, continuing without cache")
 
 
 # --- OOT status caching ---
 
 _OOT_STATUS_PREFIX = "crcr:oot:"
+_TIMING_PREFIX = "crcr:timing:"
 
 
 def set_oot_status(
@@ -148,11 +146,9 @@ def set_oot_status(
         key = _OOT_STATUS_PREFIX + owner + ":" + repo_name + ":" + head_sha
         client.setex(key, config.oot_status_ttl, json.dumps(data))
         logger.info("oot status cached key=%s", key)
-    except RedisError as exc:
-        error_message = str(exc)
-        logger.warning(
-            "redis oot status write failed: %s",
-            error_message,
+    except RedisError:
+        logger.exception(
+            "redis oot status write failed",
         )
 
 
@@ -172,3 +168,66 @@ def get_oot_status(
     if value is None:
         return None
     return json.loads(cast(str, value))
+
+
+# --- Timing helpers ---
+
+
+def _timing_key(downstream_repo: str, head_sha: str) -> str:
+    owner, repo_name = downstream_repo.split("/", 1)
+    return _TIMING_PREFIX + owner + ":" + repo_name + ":" + head_sha
+
+
+def set_dispatch_time(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    ts: float,
+    client: redis_lib.Redis | None = None,
+) -> None:
+    """Set dispatch_at timestamp for downstream repo+sha. Best-effort."""
+    try:
+        if client is None:
+            client = create_client(config)
+        key = _timing_key(downstream_repo, head_sha)
+        client.setex(key, config.oot_status_ttl, json.dumps({"dispatch_at": ts}))
+        logger.info("timing dispatch cached key=%s", key)
+    except RedisError:
+        logger.exception("redis set_dispatch_time failed")
+
+
+def update_timing(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    updates: dict,
+    client: redis_lib.Redis | None = None,
+) -> None:
+    """Read-modify-write timing record to add/update fields. Best-effort."""
+    try:
+        if client is None:
+            client = create_client(config)
+        key = _timing_key(downstream_repo, head_sha)
+        value = client.get(key)
+        data = json.loads(value) if value else {}
+        data.update(updates)
+        client.setex(key, config.oot_status_ttl, json.dumps(data))
+        logger.info("timing updated key=%s", key)
+    except RedisError:
+        logger.exception("redis update_timing failed")
+
+
+def get_timing(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    client: redis_lib.Redis | None = None,
+) -> dict | None:
+    """Return timing record or None on miss. Re-raises RedisError to let callers detect infra failures if needed."""
+    if client is None:
+        client = create_client(config)
+    key = _timing_key(downstream_repo, head_sha)
+    value = client.get(key)
+    if value is None:
+        return None
+    return json.loads(value)

@@ -28,14 +28,6 @@ class ResultCallbackPayload(TypedDict):
     job_id: NotRequired[int]
 
 
-class OOTStatusRecord(TypedDict):
-    downstream_repo: str
-    upstream_repo: str
-    head_sha: str
-    pr_number: int
-    status: str
-    conclusion: str | None
-    workflow_name: str
-    workflow_url: str
-    run_id: NotRequired[int]
-    job_id: NotRequired[int]
+class WorkflowTimingRecord(TypedDict):
+    queue_time: float | None
+    execution_time: float | None

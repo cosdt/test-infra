@@ -38,61 +38,27 @@ def _payload(status="completed", conclusion: str | None = "success"):
 
 
 class TestValidatePayload(unittest.TestCase):
-    def test_valid_completed_payload(self):
-        result = validate_payload(
-            {
-                "head_sha": "abc",
-                "status": "completed",
-                "conclusion": "success",
-                "workflow_name": "CI",
-                "workflow_url": "http://x",
-                "downstream_repo": "org/repo",
-                "upstream_repo": "pytorch/pytorch",
-                "pr_number": 42,
-            }
-        )
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["conclusion"], "success")
+    def test_valid_payload(self):
+        validate_payload(_payload(status="completed", conclusion="success"))
+        validate_payload(_payload(status="completed", conclusion="failure"))
+        validate_payload(_payload(status="in_progress", conclusion=None))
 
-    def test_valid_in_progress_payload(self):
-        result = validate_payload(
-            {
-                "head_sha": "abc",
-                "status": "in_progress",
-                "conclusion": None,
-                "workflow_name": "CI",
-                "workflow_url": "http://x",
-                "downstream_repo": "org/repo",
-                "upstream_repo": "pytorch/pytorch",
-                "pr_number": 42,
-            }
-        )
-        self.assertEqual(result["status"], "in_progress")
-        self.assertIsNone(result["conclusion"])
-
-    def test_missing_required_field(self):
-        with self.assertRaises(HTTPException) as ctx:
-            validate_payload({"status": "completed"})
-        self.assertEqual(ctx.exception.status_code, 400)
-
-    def test_invalid_status(self):
-        with self.assertRaises(HTTPException) as ctx:
+    def test_invalid_payload(self):
+        with self.assertRaises(HTTPException):
+            validate_payload(_payload(status="unknown_status", conclusion=None))
+        with self.assertRaises(HTTPException):
+            validate_payload(_payload(status="in_progress", conclusion="success"))
+        with self.assertRaises(HTTPException):
+            validate_payload(_payload(status="in_progress", conclusion="failure"))
+        with self.assertRaises(HTTPException):
             validate_payload(
-                {
-                    "head_sha": "abc",
-                    "status": "unknown",
-                    "conclusion": "success",
-                    "workflow_name": "CI",
-                    "workflow_url": "http://x",
-                    "downstream_repo": "org/repo",
-                    "upstream_repo": "pytorch/pytorch",
-                    "pr_number": 42,
-                }
+                _payload(status="completed", conclusion="unknown_conclusion")
             )
-        self.assertEqual(ctx.exception.status_code, 400)
-
-    def test_completed_without_conclusion(self):
-        with self.assertRaises(HTTPException) as ctx:
+        with self.assertRaises(HTTPException):
+            validate_payload(
+                _payload(status="in_progress", conclusion="unknown_conclusion")
+            )
+        with self.assertRaises(HTTPException):
             validate_payload(
                 {
                     "head_sha": "abc",
@@ -105,7 +71,6 @@ class TestValidatePayload(unittest.TestCase):
                     "pr_number": 42,
                 }
             )
-        self.assertEqual(ctx.exception.status_code, 400)
 
 
 class TestResultHandler(unittest.TestCase):
