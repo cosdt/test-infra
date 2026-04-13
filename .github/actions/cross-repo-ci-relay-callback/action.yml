@@ -56,10 +56,8 @@ runs:
         TEST_RESULTS: ${{ inputs.test-results }}
         OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
         CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-        DOWNSTREAM_REPO: ${{ github.repository }}
         WORKFLOW_NAME: ${{ github.workflow }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        RUN_ID: ${{ github.run_id }}
       run: |
         set -euo pipefail
 
@@ -81,50 +79,20 @@ runs:
         except json.JSONDecodeError as exc:
             sys.exit(f"::error::github.event.client_payload is not valid JSON: {exc}")
 
-        dispatch = client_payload.get("payload") or {}
-        pr = dispatch.get("pull_request") or {}
+        client_payload["status"] = status
+        client_payload["conclusion"] = conclusion
+        client_payload["workflow_name"] = os.environ["WORKFLOW_NAME"]
+        client_payload["workflow_url"] = os.environ["WORKFLOW_URL"]
 
-        upstream_repo = (dispatch.get("repository") or {}).get("full_name")
-        pr_number = dispatch.get("number")
-        head_sha = (pr.get("head") or {}).get("sha")
-        callback_token = client_payload.get("callback_token")
-
-        missing = [
-            name for name, value in (
-                ("upstream_repo", upstream_repo),
-                ("pr_number", pr_number),
-                ("head_sha", head_sha),
-                ("callback_token", callback_token),
-            ) if not value
-        ]
-        if missing:
-            sys.exit(
-                "::error::client_payload is missing required fields: "
-                + ", ".join(missing)
-                + ". This action must run in a workflow triggered by a relay repository_dispatch."
-            )
-
-        payload = {
-            "status":          status,
-            "conclusion":      conclusion,
-            "downstream_repo": os.environ["DOWNSTREAM_REPO"],
-            "upstream_repo":   upstream_repo,
-            "pr_number":       int(pr_number),
-            "head_sha":        head_sha,
-            "workflow_name":   os.environ["WORKFLOW_NAME"],
-            "workflow_url":    os.environ["WORKFLOW_URL"],
-            "run_id":          int(os.environ["RUN_ID"]),
-            "callback_token":  callback_token,
-        }
 
         test_results_raw = os.environ.get("TEST_RESULTS", "").strip()
         if test_results_raw:
             try:
-                payload["test_results"] = json.loads(test_results_raw)
+                client_payload["test_results"] = json.loads(test_results_raw)
             except json.JSONDecodeError as exc:
                 sys.exit(f"::error::test-results input is not valid JSON: {exc}")
 
-        print(json.dumps(payload))
+        print(json.dumps(client_payload))
         PYEOF
         )
 
