@@ -46,7 +46,7 @@ runs:
       shell: bash
       env:
         # TODO: update once the relay Lambda Function URL is provisioned.
-        RELAY_URL: https://klndjrcmryx5k4kecdpjnton2u0hbmvo.lambda-url.us-east-1.on.aws
+        RELAY_URL: https://zciswjsrynb6ksccc2nb3mckpa0ldzou.lambda-url.us-east-1.on.aws
         STATUS: ${{ inputs.status }}
         CONCLUSION: ${{ inputs.conclusion }}
         TEST_RESULTS: ${{ inputs.test-results }}
