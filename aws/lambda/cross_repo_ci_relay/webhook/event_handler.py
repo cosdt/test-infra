@@ -5,8 +5,7 @@ import logging
 import time
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
-import jwt
-from utils import gh_helper, redis_helper
+from utils import gh_helper, jwt_helper, redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
 from utils.types import EventDispatchPayload, HTTPException
@@ -14,30 +13,6 @@ from utils.types import EventDispatchPayload, HTTPException
 
 logger = logging.getLogger(__name__)
 _PULL_REQUEST_ALLOW_ACTIONS = frozenset({"opened", "reopened", "synchronize", "closed"})
-
-
-def _build_callback_token(
-    *,
-    config: RelayConfig,
-    downstream_repo: str,
-    delivery_id: str,
-    payload: dict,
-) -> str:
-    pull_request = payload.get("pull_request") or {}
-    head = pull_request.get("head") or {}
-    now = int(time.time())
-    claims = {
-        "downstream_repo": downstream_repo,
-        "upstream_repo": (payload.get("repository") or {}).get("full_name", ""),
-        "head_sha": head.get("sha", ""),
-        "delivery_id": delivery_id,
-        "iat": now,
-        "exp": now + config.callback_token_ttl,
-    }
-    pr_number = pull_request.get("number")
-    if pr_number is not None:
-        claims["pr_number"] = pr_number
-    return jwt.encode(claims, config.github_app_secret, algorithm="HS256")
 
 
 def _dispatch_one(
@@ -48,7 +23,7 @@ def _dispatch_one(
     client_payload: EventDispatchPayload,
 ) -> None:
     dispatch_payload = dict(client_payload)
-    dispatch_payload["callback_token"] = _build_callback_token(
+    dispatch_payload["callback_token"] = jwt_helper.create_relay_dispatch_token(
         config=config,
         downstream_repo=downstream_repo,
         delivery_id=client_payload["delivery_id"],
@@ -72,8 +47,8 @@ def _dispatch_one(
         )
         head_sha = pr_head.get("sha") or ""
         if head_sha:
-            redis_helper.set_dispatch_time(
-                config, downstream_repo, head_sha, time.time()
+            redis_helper.set_timing(
+                config, downstream_repo, head_sha, "dispatch", time.time()
             )
     except Exception:
         logger.exception("Failed to record dispatch time for %s", downstream_repo)

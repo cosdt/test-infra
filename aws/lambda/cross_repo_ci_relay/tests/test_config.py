@@ -11,7 +11,6 @@ _ENV = {
     "ALLOWLIST_URL": "https://github.com/o/r/blob/main/f.yaml",
     "REDIS_ENDPOINT": "cache:6379",
     "REDIS_LOGIN": "local-pass",
-    "HUD_BOT_KEY": "hud-key",
 }
 
 
@@ -44,6 +43,7 @@ class TestConfig(unittest.TestCase):
             github_app_secret="s",
             github_app_private_key="k",
             redis_login="secret-pass",
+            hud_bot_key="hud-key",
         )
         cfg = RelayConfig.from_env()
         self.assertEqual(cfg.github_app_secret, "s")

@@ -4,101 +4,18 @@ import base64
 import json
 import logging
 
-import jwt
-from utils.allowlist import AllowlistLevel, load_allowlist
-from utils.config import RelayConfig
+from utils import jwt_helper
+from utils.config import get_config
 from utils.types import HTTPException
 
+from . import result_handler
 
-try:
-    from . import result_handler
-except ImportError:
-    import result_handler  # type: ignore[no-redef]
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
-_cached_config: RelayConfig | None = None
-
-_jwks_client = jwt.PyJWKClient(
-    "https://token.actions.githubusercontent.com/.well-known/jwks"
-)
-
 
 _JSON_HEADERS = {"content-type": "application/json"}
-
-
-def _verify_callback_token(config: RelayConfig, token: str, payload: dict) -> None:
-    # This token is minted by the webhook lambda and passed through the
-    # downstream workflow, so it proves the callback belongs to a relay-issued
-    # dispatch rather than an arbitrary external request.
-    if not token:
-        raise HTTPException(401, "Missing callback token")
-
-    try:
-        claims = jwt.decode(token, config.github_app_secret, algorithms=["HS256"])
-    except Exception as exc:
-        logger.exception("Callback token verification error")
-        raise HTTPException(401, "Invalid callback token") from exc
-
-    expected_pairs = {
-        "downstream_repo": payload.get("downstream_repo"),
-        "upstream_repo": payload.get("upstream_repo"),
-        "head_sha": payload.get("head_sha"),
-    }
-
-    if payload.get("pr_number") is not None:
-        expected_pairs["pr_number"] = int(payload["pr_number"])
-
-    for key, expected in expected_pairs.items():
-        if expected is None:
-            continue
-        if claims.get(key) != expected:
-            logger.error(
-                "Callback token claim mismatch for %s: expected %s, got %s",
-                key,
-                expected,
-                claims.get(key),
-            )
-            raise HTTPException(401, "Invalid callback token")
-
-
-def _verify_github_oidc_token(config: RelayConfig, token: str) -> None:
-    try:
-        if token.lower().startswith("bearer "):
-            token = token[7:].strip()
-
-        # GitHub signs the OIDC token with its own keypair; here we only need
-        # to verify that the caller is an allowlisted downstream repository.
-        signing_key = _jwks_client.get_signing_key_from_jwt(token)
-        data = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            issuer="https://token.actions.githubusercontent.com",
-            options={"verify_aud": False},
-        )
-        repo = data.get("repository")
-        allowlist = load_allowlist(config)
-        allowed_repos, _ = allowlist.get_repos_at_or_above_level(AllowlistLevel.L2)
-        if repo not in allowed_repos:
-            logger.error(
-                "OIDC token repository not in allowlist: %s",
-                repo,
-            )
-            raise HTTPException(401, "Invalid authorization token")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("OIDC token verification error")
-        raise HTTPException(401, "Invalid authorization token") from exc
-
-
-def _get_config() -> RelayConfig:
-    global _cached_config
-    if _cached_config is None:
-        _cached_config = RelayConfig.from_env()
-    return _cached_config
 
 
 def lambda_handler(event, context):
@@ -130,15 +47,17 @@ def lambda_handler(event, context):
         }
 
     try:
-        config = _get_config()
+        config = get_config()
         token = headers.get("authorization", "")
         payload = json.loads(body_bytes) if body_bytes else {}
         if not token:
             raise HTTPException(401, "Missing authorization token")
-        # The callback token ties the payload back to the relay dispatch, while
-        # the OIDC token proves which GitHub Actions workflow is calling us.
-        _verify_callback_token(config, payload.get("callback_token", ""), payload)
-        _verify_github_oidc_token(config, token)
+        oidc_claims = jwt_helper.verify_downstream_identity(config, token)
+        dispatch_claims = jwt_helper.verify_relay_dispatch_token(
+            config, payload.get("callback_token", "")
+        )
+        payload["downstream_repo"] = oidc_claims.get("repository", "")
+        payload["head_sha"] = dispatch_claims.get("head_sha", "")
         result = result_handler.handle(config, payload)
         return {"statusCode": 200, "headers": _JSON_HEADERS, "body": json.dumps(result)}
 

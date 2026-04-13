@@ -149,3 +149,13 @@ class RelayConfig:
             callback_token_ttl=callback_token_ttl,
             oot_status_ttl=oot_status_ttl,
         )
+
+
+_cached_config: RelayConfig | None = None
+
+
+def get_config() -> RelayConfig:
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = RelayConfig.from_env()
+    return _cached_config

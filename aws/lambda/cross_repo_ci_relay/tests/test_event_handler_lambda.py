@@ -52,7 +52,7 @@ def _event(*, method="POST", path="/github/webhook", body=None, headers=None):
     }
 
 
-class TestEventHanlerLambda(unittest.TestCase):
+class TestLambdaHandler(unittest.TestCase):
     def setUp(self):
         lambda_function._cached_config = None
 
