@@ -12,11 +12,6 @@ description: >
   results.
 
 inputs:
-  callback-url:
-    description: >
-      Base URL of the result callback server.
-    required: false
-    default: https://zciswjsrynb6ksccc2nb3mckpa0ldzou.lambda-url.us-east-1.on.aws/github/result
   status:
     description: >
       Workflow status to report.  Must be either "in_progress" or "completed".
@@ -34,6 +29,11 @@ inputs:
       downstream job.  Forwarded verbatim to the relay under `test_results`.
     required: false
     default: ''
+  callback-url:
+    description: >
+      Base URL of the result callback server.
+    required: false
+    default: https://zciswjsrynb6ksccc2nb3mckpa0ldzou.lambda-url.us-east-1.on.aws/github/result
 
 runs:
   using: composite
@@ -44,20 +44,21 @@ runs:
       with:
         script: |
           const audience = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
-          core.setSecret(await core.getIDToken(audience));
-          core.setOutput('token', await core.getIDToken(audience));
+          const token = await core.getIDToken(audience);
+          core.setSecret(token);
+          core.setOutput('token', token);
 
     - name: Send callback to relay server
       shell: bash
       env:
-        CALLBACK_URL: ${{ inputs.callback-url }}
         STATUS: ${{ inputs.status }}
         CONCLUSION: ${{ inputs.conclusion }}
-        TEST_RESULTS: ${{ inputs.test-results }}
-        OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
-        CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         WORKFLOW_NAME: ${{ github.workflow }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        TEST_RESULTS: ${{ inputs.test-results }}
+        CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        CALLBACK_URL: ${{ inputs.callback-url }}
       run: |
         set -euo pipefail
 
@@ -79,25 +80,24 @@ runs:
         except json.JSONDecodeError as exc:
             sys.exit(f"::error::github.event.client_payload is not valid JSON: {exc}")
 
-        if not isinstance(client_payload, dict):
-            sys.exit(
-                "::error::github.event.client_payload must be a JSON object; "
-                "is this workflow running under a repository_dispatch trigger?"
-            )
+        # Relay's original dispatch payload (event_type, delivery_id, payload) is
+        # forwarded verbatim.  Downstream-reported fields live in a sibling
+        # `workflow` dict so the two sources stay clearly separated on the wire.
+        workflow: dict = {
+            "status": status,
+            "conclusion": conclusion,
+            "name": os.environ["WORKFLOW_NAME"],
+            "url": os.environ["WORKFLOW_URL"],
+        }
 
-        client_payload["status"] = status
-        client_payload["conclusion"] = conclusion
-        client_payload["workflow_name"] = os.environ["WORKFLOW_NAME"]
-        client_payload["workflow_url"] = os.environ["WORKFLOW_URL"]
-
-
-        test_results_raw = os.environ.get("TEST_RESULTS", "").strip()
-        if test_results_raw:
+        test_results = os.environ.get("TEST_RESULTS", "").strip()
+        if test_results:
             try:
-                client_payload["test_results"] = json.loads(test_results_raw)
+                workflow["test_results"] = json.loads(test_results)
             except json.JSONDecodeError as exc:
                 sys.exit(f"::error::test-results input is not valid JSON: {exc}")
 
+        client_payload["workflow"] = workflow
         print(json.dumps(client_payload))
         PYEOF
         )
@@ -112,11 +112,9 @@ runs:
             "${CALLBACK_URL%/}"
         )
 
-        echo "Relay server response (HTTP ${HTTP_CODE}):"
-        cat /tmp/relay_response.json || true
-        echo
-
         if [[ "${HTTP_CODE}" -lt 200 || "${HTTP_CODE}" -ge 300 ]]; then
           echo "::error::Callback server returned HTTP ${HTTP_CODE}."
           exit 1
         fi
+
+        echo "Relay server response HTTP: ${HTTP_CODE}"

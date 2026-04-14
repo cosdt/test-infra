@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from utils.types import HTTPException
+from utils.misc import HTTPException
 from webhook.lambda_function import lambda_handler
 
 

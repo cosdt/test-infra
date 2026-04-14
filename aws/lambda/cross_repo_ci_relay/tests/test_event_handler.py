@@ -9,7 +9,6 @@ def _cfg():
     cfg.github_app_id = "12345"
     cfg.github_app_private_key = "fake-key"
     cfg.max_dispatch_workers = 4
-    cfg.callback_token_ttl = 3600
     cfg.github_app_secret = "test-secret"
     return cfg
 

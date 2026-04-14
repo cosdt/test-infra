@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import redis as redis_lib
 from utils import redis_helper
-from utils.types import TimingPhase
+from utils.misc import TimingPhase
 from utils.redis_helper import (
     _ALLOWLIST_CACHE_KEY,
     create_client,
@@ -72,8 +72,8 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_login = ""
         cfg.oot_status_ttl = 3600
 
-        # must not raise
-        set_timing(cfg, "org/repo", "abc123", TimingPhase.DISPATCH, 1234.5, client)
+        # must not raise — signature is (config, delivery_id, downstream_repo, phase, ts, client)
+        set_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, 1234.5, client)
 
     def test_get_timing_returns_none_on_cache_miss(self):
         from utils.redis_helper import get_timing
@@ -84,7 +84,7 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_endpoint = "host:6379"
         cfg.redis_login = ""
 
-        result = get_timing(cfg, "org/repo", "abc123", TimingPhase.DISPATCH, client)
+        result = get_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, client)
 
         self.assertIsNone(result)
 
@@ -100,7 +100,7 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_login = ""
 
         self.assertIsNone(
-            get_timing(cfg, "org/repo", "abc123", TimingPhase.DISPATCH, client)
+            get_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, client)
         )
 
 

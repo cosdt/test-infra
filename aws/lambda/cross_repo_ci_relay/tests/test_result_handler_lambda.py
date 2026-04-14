@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from callback.lambda_function import lambda_handler
-from utils.types import HTTPException
+from utils.misc import HTTPException
 
 
 def _event(
@@ -96,9 +96,7 @@ class TestResultLambdaHandler(unittest.TestCase):
         response = lambda_handler(_event(), {})
 
         self.assertEqual(response["statusCode"], 503)
-        self.assertEqual(
-            json.loads(response["body"])["detail"], "HUD unreachable"
-        )
+        self.assertEqual(json.loads(response["body"])["detail"], "HUD unreachable")
 
     @patch("callback.lambda_function.get_config")
     @patch("callback.lambda_function.jwt_helper.verify_oidc_token")
@@ -112,7 +110,6 @@ class TestResultLambdaHandler(unittest.TestCase):
         response = lambda_handler(_event(), {})
 
         self.assertEqual(response["statusCode"], 500)
-
 
 
 if __name__ == "__main__":

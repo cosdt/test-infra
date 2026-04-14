@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from utils.jwt_helper import verify_oidc_token
-from utils.types import HTTPException
+from utils.misc import HTTPException
 
 
 def _cfg():

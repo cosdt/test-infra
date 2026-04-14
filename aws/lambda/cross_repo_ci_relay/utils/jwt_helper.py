@@ -6,7 +6,7 @@ import logging
 
 import jwt
 from utils.config import RelayConfig
-from utils.types import HTTPException
+from utils.misc import HTTPException
 
 
 logger = logging.getLogger(__name__)

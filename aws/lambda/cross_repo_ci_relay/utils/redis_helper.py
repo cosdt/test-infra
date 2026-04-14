@@ -7,7 +7,7 @@ import redis as redis_lib
 from redis.exceptions import RedisError
 
 from .config import RelayConfig
-from .types import TimingPhase
+from .misc import TimingPhase
 
 
 logger = logging.getLogger(__name__)
