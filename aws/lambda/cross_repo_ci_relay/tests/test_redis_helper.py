@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import redis as redis_lib
 from utils import redis_helper
+from utils.misc import TimingPhase
 from utils.redis_helper import (
     _ALLOWLIST_CACHE_KEY,
     create_client,
@@ -71,8 +72,8 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_login = ""
         cfg.oot_status_ttl = 3600
 
-        # must not raise
-        set_timing(cfg, "org/repo", "abc123", "dispatch", 1234.5, client)
+        # must not raise — signature is (config, delivery_id, downstream_repo, phase, ts, client)
+        set_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, 1234.5, client)
 
     def test_get_timing_returns_none_on_cache_miss(self):
         from utils.redis_helper import get_timing
@@ -83,11 +84,13 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_endpoint = "host:6379"
         cfg.redis_login = ""
 
-        result = get_timing(cfg, "org/repo", "abc123", "dispatch", client)
+        result = get_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, client)
 
         self.assertIsNone(result)
 
-    def test_get_timing_reraises_redis_error(self):
+    def test_get_timing_swallows_redis_error(self):
+        # Timing is a best-effort reporting enrichment — a Redis outage must
+        # degrade gracefully to None rather than breaking the result handler.
         from utils.redis_helper import get_timing
 
         client = MagicMock()
@@ -96,8 +99,9 @@ class TestTimingHelpers(unittest.TestCase):
         cfg.redis_endpoint = "host:6379"
         cfg.redis_login = ""
 
-        with self.assertRaises(redis_lib.exceptions.RedisError):
-            get_timing(cfg, "org/repo", "abc123", "dispatch", client)
+        self.assertIsNone(
+            get_timing(cfg, "del-123", "org/repo", TimingPhase.DISPATCH, client)
+        )
 
 
 if __name__ == "__main__":

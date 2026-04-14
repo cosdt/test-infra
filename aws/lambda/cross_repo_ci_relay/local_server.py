@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 load_dotenv(find_dotenv(usecwd=True))
 
-from result import lambda_function as result_lambda
+from callback import lambda_function as callback_lambda
 from webhook import lambda_function as webhook_lambda
 
 
@@ -50,7 +50,7 @@ async def github_result(req: Request):
         "isBase64Encoded": False,
     }
 
-    result = result_lambda.lambda_handler(event, None)
+    result = callback_lambda.lambda_handler(event, None)
     return JSONResponse(
         status_code=result["statusCode"], content=json.loads(result["body"])
     )

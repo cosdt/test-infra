@@ -5,10 +5,10 @@ import logging
 import time
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
-from utils import gh_helper, jwt_helper, redis_helper
+from utils import gh_helper, redis_helper
 from utils.allowlist import AllowlistLevel, load_allowlist
 from utils.config import RelayConfig
-from utils.types import EventDispatchPayload, HTTPException
+from utils.misc import EventDispatchPayload, HTTPException, TimingPhase
 
 
 logger = logging.getLogger(__name__)
@@ -22,13 +22,6 @@ def _dispatch_one(
     event_type: str,
     client_payload: EventDispatchPayload,
 ) -> None:
-    dispatch_payload = dict(client_payload)
-    dispatch_payload["callback_token"] = jwt_helper.create_relay_dispatch_token(
-        config=config,
-        downstream_repo=downstream_repo,
-        delivery_id=client_payload["delivery_id"],
-        payload=client_payload["payload"],
-    )
     installation_token = gh_helper.get_repo_access_token(
         config.github_app_id,
         config.github_app_private_key,
@@ -38,20 +31,19 @@ def _dispatch_one(
         token=installation_token,
         repo_full_name=downstream_repo,
         event_type=event_type,
-        client_payload=dispatch_payload,
+        client_payload=client_payload,
     )
-    # Record dispatch timestamp for timing calculations (best-effort)
-    try:
-        pr_head = ((client_payload.get("payload") or {}).get("pull_request") or {}).get(
-            "head", {}
-        )
-        head_sha = pr_head.get("sha") or ""
-        if head_sha:
-            redis_helper.set_timing(
-                config, downstream_repo, head_sha, "dispatch", time.time()
-            )
-    except Exception:
-        logger.exception("Failed to record dispatch time for %s", downstream_repo)
+
+    # Record dispatch timestamp for timing calculations (best-effort).
+    # Keyed by X-GitHub-Delivery (globally unique per webhook delivery) so
+    # retries/reruns with the same head_sha don't collide.
+    redis_helper.set_timing(
+        config,
+        client_payload.get("delivery_id"),
+        downstream_repo,
+        TimingPhase.DISPATCH,
+        time.time(),
+    )
 
 
 def _dispatch_to_allowlist(

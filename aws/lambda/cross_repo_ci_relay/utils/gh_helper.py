@@ -5,7 +5,7 @@ import logging
 import github
 from github import GithubIntegration
 
-from .types import EventDispatchPayload
+from .misc import EventDispatchPayload
 
 
 logger = logging.getLogger(__name__)

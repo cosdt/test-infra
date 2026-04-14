@@ -1,6 +1,6 @@
 # Cross Repo CI Relay
 
-An AWS Lambda function that relays GitHub webhook events from the upstream repository to downstream repositories.
+An AWS Lambda function that relays GitHub webhook events from the upstream repository to downstream repositories, and forwards downstream CI results to HUD.
 
 For more information, please refer to this [RFC](https://github.com/pytorch/pytorch/issues/175022).
 
@@ -35,13 +35,92 @@ The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL 
 
 L2+ downstream repositories can report the status of their CI workflows back to the relay server using the [`cross-repo-ci-relay-callback`](../../../.github/actions/cross-repo-ci-relay-callback/action.yml) composite action.
 
-### Security
+### Security and the Relay/HUD boundary
 
-For security purpose, a request to the `result` lambda function must proceed the following authentication checks:
+The callback endpoint is a **near-transparent proxy to HUD** with a single
+security responsibility: identifying the calling repo.  Everything else —
+schema validation, persistence, dedup — is HUD's job.
 
-- Webhook JWT check: ensure the request is triggered from the `webhook` lambda function
-- OIDC check: ensure the request is sent from GitHub rather than anybody else
-- Payload check: ensure the request is sent from the qualified repositories written in `allowlist`
+- **Identity (Relay's job)**: the `Authorization: Bearer <oidc-token>` header
+  is verified against GitHub's JWKS.  The OIDC `repository` claim is the only
+  trusted identity for the caller and is used for the L2+ allowlist check.
+  Relay forwards this trusted value to HUD as a top-level `authenticated_repo`
+  field; HUD should prefer it over anything self-reported in `body`.
+- **Schema / business validation (HUD's job)**: the callback body is passed
+  through to HUD verbatim as a top-level `body` field.  Relay does **not**
+  validate fields inside `body.workflow` or `body.payload` — HUD owns the
+  schema since it owns persistence.  Relay only enforces that `delivery_id`
+  and `workflow.status` are present (contract violation → `400`).
+- **Timing (Relay's job)**: Relay records dispatch/in-progress timestamps in
+  Redis keyed on `delivery_id`, then computes `queue_time` and
+  `execution_time` and surfaces them to HUD as `ci_metrics`.  Each callback
+  phase reports exactly one metric:
+  - `in_progress` → `queue_time` (dispatch → in_progress)
+  - `completed`   → `execution_time` (in_progress → completed)
+
+The HUD request looks like:
+
+```json
+{
+  "body": {
+    "event_type": "pull_request",
+    "delivery_id": "<github X-GitHub-Delivery>",
+    "payload": { ...original upstream webhook payload, verbatim... },
+    "workflow": {
+      "status": "completed",
+      "conclusion": "success",
+      "name": "CI",
+      "url": "https://github.com/org/repo/actions/runs/123",
+      "test_results": { ... }
+    }
+  },
+  "ci_metrics": { "queue_time": 1.23, "execution_time": null },
+  "authenticated_repo": "org/repo"
+}
+```
+
+Trust boundaries inside `body`:
+
+- `body.payload` is the upstream webhook payload, transparently forwarded —
+  trusted at dispatch time, but not re-verified on the callback.
+- `body.workflow` is **self-reported by the downstream CI** and is not
+  authenticated.  Only `authenticated_repo` carries a cryptographic identity.
+
+### Error propagation back to the downstream workflow
+
+| HUD response | Relay behaviour | Effect on downstream CI step |
+|---|---|---|
+| `2xx` | record delivered | green |
+| `4xx` (schema reject) | propagate same status | **red** — author must fix payload |
+| `5xx` / network error | log + swallow | green — HUD outage is not the caller's fault |
+
+The asymmetry is deliberate: `4xx` means the caller sent something wrong and
+should see it; `5xx`/network means HUD or its infrastructure is broken and
+should not be surfaced as a red CI step across every L2 repo.  Operators are
+expected to alert on the `HUD forward failed` CloudWatch log pattern.
+
+#### Known limitations of this model
+
+A compromised or malicious maintainer of an allowlisted repo can:
+
+1. Fabricate `workflow.status` / `workflow.conclusion` values for upstream PRs
+   their repo was never dispatched for — HUD will receive the row, but
+   `authenticated_repo` always identifies the true caller.
+2. Replay an older dispatched payload against the callback endpoint — there
+   is no dispatch-side nonce.
+3. Tamper with any field inside `body` — HUD must trust `authenticated_repo`,
+   not the body.
+
+All three attacks are **scoped to the attacker's own OIDC-authenticated repo
+identity** — OIDC guarantees they cannot impersonate another allowlisted
+repo.  Mitigation is operational: every HUD row carries `authenticated_repo`,
+so misbehaviour is observable, and the offending repo can be removed from
+`allowlist.yaml`.
+
+If stronger guarantees are required later, the typical next step is a signed
+callback token minted by the webhook side plus a one-shot state machine in
+Redis keyed on `delivery_id`.  This was intentionally deferred to keep the
+relay simple — see the PR description for the discussion.
 
 ### Prerequisites
 
@@ -50,7 +129,11 @@ For security purpose, a request to the `result` lambda function must proceed the
 
 ### Usage
 
-When triggered by a relay `repository_dispatch`, `pr-number`, `head-sha`, and `upstream-repo` are **automatically resolved** from `github.event.client_payload` — only `status` (and `conclusion` for the final report) need to be provided explicitly.
+When triggered by a relay `repository_dispatch`, the action automatically
+reads `github.event.client_payload` for `delivery_id` and the upstream
+webhook payload, and reads `github.workflow` / the current run URL for the
+workflow identity.  Workflow authors only need to pass `status` (and
+`conclusion` when `status=completed`).
 
 ```yaml
 on:
@@ -85,42 +168,81 @@ jobs:
 |---|---|---|---|
 | `status` | **yes** | — | `in_progress` or `completed` |
 | `conclusion` | no | `''` | `success` or `failure` (required when `status=completed`) |
-| `callback-url` | no | see `action.yml` | result callback url for local testing |
+| `test-results` | no | `''` | Optional JSON string forwarded under `body.workflow.test_results` |
+| `callback-url` | no | see `action.yml` | Callback endpoint URL (overridable for local testing) |
 
 ## Build, Deploy, and Test
 
+### Deployment layout
+
+The build packages each Lambda as a zip that preserves the package hierarchy:
+
+```
+deployment/
+├── webhook/
+│   ├── lambda_function.py
+│   └── event_handler.py
+├── callback/
+│   ├── lambda_function.py
+│   └── result_handler.py
+└── utils/
+    └── ...
+```
+
+This matches the layout used during local development and tests, so imports
+behave identically in both environments.  Configure the AWS Lambda handlers
+as:
+
+- Webhook Lambda: `webhook.lambda_function.lambda_handler`
+- Callback Lambda: `callback.lambda_function.lambda_handler`
+
 ### Make Targets
 
-Build the Webhook Lambda zip (output: deployment.zip)
+Build the Webhook Lambda zip (output: `webhook/deployment.zip`):
+
 ```bash
 cd webhook
 make deployment.zip
 ```
 
-Build the Result Lambda zip (output: deployment.zip)
+Build the Callback Lambda zip (output: `callback/deployment.zip`):
+
 ```bash
-cd result
+cd callback
 make deployment.zip
 ```
 
-Deploy both zip to AWS Lambda (requires AWS CLI v2 configured with permissions)
+Deploy both zips to AWS Lambda (requires AWS CLI v2 with permissions):
+
 ```bash
-make deploy AWS_REGION=us-east-1 WEBHOOK_FUNCTION_NAME=cross_repo_ci_webhook RESULT_FUNCTION_NAME=cross_repo_ci_result
+make deploy AWS_REGION=us-east-1 \
+    WEBHOOK_FUNCTION_NAME=cross_repo_ci_webhook \
+    CALLBACK_FUNCTION_NAME=cross_repo_ci_callback
 ```
 
-Run all unit tests under tests/ folder
+Either side can be deployed independently:
+
+```bash
+make deploy-webhook
+make deploy-callback
+```
+
+Run all unit tests under `tests/`:
+
 ```bash
 make test
 ```
 
-Clean build artifacts
+Clean build artifacts:
+
 ```bash
 make clean
 ```
 
 ## Local Development
 
-`local_server.py` wraps the Lambda handler in a FastAPI app so you can test the full cross-repo-ci-relay flow without deploying to AWS.
+`local_server.py` wraps both Lambda handlers in a FastAPI app so you can test
+the full cross-repo-ci-relay flow without deploying to AWS.
 
 ### Prerequisites
 
@@ -143,7 +265,7 @@ make clean
   smee --url https://smee.io/<your-channel> --path /github/webhook --port 8000
   ```
 
-  CLI to forward GitHub result callbacks to localhost (should set this url to `callback-url` in downstream workflow):
+  CLI to forward GitHub result callbacks to localhost (set this URL as `callback-url` in the downstream workflow):
   ```bash
   npm install -g smee-client
   smee --url https://smee.io/<your-channel> --path /github/result --port 8000
@@ -181,7 +303,7 @@ make clean
    REDIS_LOGIN=default:<password>
    ALLOWLIST_TTL_SECONDS=1200
    ```
-   **Note**: `ALLOWLIST_URL` is required for local development which should point to a GitHub URL that can be different from the real one.
+   **Note**: `ALLOWLIST_URL` is required for local development and should point to a GitHub URL (it can differ from the production one).
 
 3. Start the server:
    ```bash
@@ -190,4 +312,4 @@ make clean
 
 4. Point your GitHub App's webhook URL to the smee.io channel, then open or update a pull request in the upstream repo to trigger a full relay cycle.
 
-5. Check and see whether the workflow run status is uploaded through `callback-url`.
+5. Check whether the workflow run status is reported back through `callback-url`.

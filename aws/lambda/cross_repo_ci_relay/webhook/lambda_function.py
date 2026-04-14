@@ -6,14 +6,9 @@ import json
 import logging
 
 from utils.config import get_config
-from utils.lambda_utils import JSON_HEADERS, parse_lambda_event
-from utils.types import HTTPException
+from utils.misc import HTTPException, JSON_HEADERS, parse_lambda_event
 
-
-try:
-    from . import event_handler
-except ImportError:
-    import event_handler
+from . import event_handler
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
