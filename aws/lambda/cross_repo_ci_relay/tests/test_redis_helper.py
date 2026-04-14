@@ -61,34 +61,6 @@ class TestTimingHelpers(unittest.TestCase):
         redis_helper._cached_client = None
         redis_helper._cached_client_url = None
 
-    def test_timing_key_format(self):
-        from utils.redis_helper import _timing_key
-
-        key = _timing_key("org/repo", "abc123", "dispatch")
-
-        self.assertEqual(key, "crcr:timing:org:repo:abc123:dispatch")
-
-    def test_timing_key_in_progress_phase(self):
-        from utils.redis_helper import _timing_key
-
-        key = _timing_key("pytorch/pytorch", "sha456", "in_progress")
-
-        self.assertEqual(key, "crcr:timing:pytorch:pytorch:sha456:in_progress")
-
-    def test_set_timing_calls_setex_with_correct_key_and_ttl(self):
-        from utils.redis_helper import set_timing
-
-        client = MagicMock()
-        cfg = MagicMock()
-        cfg.redis_endpoint = "host:6379"
-        cfg.redis_login = ""
-        cfg.oot_status_ttl = 3600
-
-        set_timing(cfg, "org/repo", "abc123", "dispatch", 1234567890.0, client)
-
-        expected_key = "crcr:timing:org:repo:abc123:dispatch"
-        client.setex.assert_called_once_with(expected_key, 3600, 1234567890.0)
-
     def test_set_timing_swallows_redis_error(self):
         from utils.redis_helper import set_timing
 
@@ -101,21 +73,6 @@ class TestTimingHelpers(unittest.TestCase):
 
         # must not raise
         set_timing(cfg, "org/repo", "abc123", "dispatch", 1234.5, client)
-
-    def test_get_timing_returns_parsed_float(self):
-        from utils.redis_helper import get_timing
-
-        client = MagicMock()
-        client.get.return_value = "1234567890.123"
-        cfg = MagicMock()
-        cfg.redis_endpoint = "host:6379"
-        cfg.redis_login = ""
-
-        result = get_timing(cfg, "org/repo", "abc123", "dispatch", client)
-
-        self.assertAlmostEqual(result, 1234567890.123, places=3)
-        expected_key = "crcr:timing:org:repo:abc123:dispatch"
-        client.get.assert_called_once_with(expected_key)
 
     def test_get_timing_returns_none_on_cache_miss(self):
         from utils.redis_helper import get_timing

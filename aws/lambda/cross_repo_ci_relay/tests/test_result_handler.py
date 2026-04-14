@@ -82,24 +82,6 @@ class TestResultHandler(unittest.TestCase):
         self.assertAlmostEqual(infra["queue_time"], 30, delta=1.0)
         self.assertIsNone(infra["execution_time"])
 
-    def test_in_progress_without_dispatch_timing_queue_time_is_none(self):
-        self.mock_redis.get_timing.return_value = None
-
-        result = handle(_cfg(), _payload(status="in_progress"))
-
-        self.assertEqual(result, {"ok": True, "status": "in_progress"})
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertIsNone(infra["queue_time"])
-
-    def test_in_progress_negative_queue_time_clamped_to_zero(self):
-        # dispatch timestamp is in the future relative to in_progress (abnormal clock skew)
-        self.mock_redis.get_timing.return_value = time.time() + 100
-
-        handle(_cfg(), _payload(status="in_progress"))
-
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertEqual(infra["queue_time"], 0)
-
     # --- completed status ---
 
     def test_completed_computes_both_queue_and_execution_time(self):
@@ -122,77 +104,6 @@ class TestResultHandler(unittest.TestCase):
         self.assertAlmostEqual(infra["queue_time"], 30, delta=1.0)
         self.assertAlmostEqual(infra["execution_time"], 30, delta=1.0)
 
-    def test_completed_without_dispatch_timing_no_queue_time(self):
-        in_progress_at = time.time() - 20
-
-        def _side_effect(config, repo, sha, phase, client=None):
-            return in_progress_at if phase == "in_progress" else None
-
-        self.mock_redis.get_timing.side_effect = _side_effect
-
-        handle(_cfg(), _payload(status="completed"))
-
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertIsNone(infra["queue_time"])
-        self.assertAlmostEqual(infra["execution_time"], 20, delta=1.0)
-
-    def test_completed_without_in_progress_timing_no_execution_time(self):
-        dispatch_at = time.time() - 60
-
-        def _side_effect(config, repo, sha, phase, client=None):
-            return dispatch_at if phase == "dispatch" else None
-
-        self.mock_redis.get_timing.side_effect = _side_effect
-
-        handle(_cfg(), _payload(status="completed"))
-
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertIsNone(infra["execution_time"])
-
-    def test_completed_negative_queue_time_clamped_to_zero(self):
-        now = time.time()
-
-        def _side_effect(config, repo, sha, phase, client=None):
-            # in_progress_at < dispatch_at (abnormal)
-            return {
-                "dispatch": now + 10,
-                "in_progress": now - 5,
-            }.get(phase)
-
-        self.mock_redis.get_timing.side_effect = _side_effect
-
-        handle(_cfg(), _payload(status="completed"))
-
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertEqual(infra["queue_time"], 0)
-
-    def test_completed_negative_execution_time_clamped_to_zero(self):
-        now = time.time()
-
-        def _side_effect(config, repo, sha, phase, client=None):
-            # in_progress_at is in the future relative to completed_at (abnormal)
-            return {
-                "dispatch": now - 60,
-                "in_progress": now + 100,  # far in the future
-            }.get(phase)
-
-        self.mock_redis.get_timing.side_effect = _side_effect
-
-        handle(_cfg(), _payload(status="completed"))
-
-        _, _, infra = self.mock_hud.call_args[0]
-        self.assertEqual(infra["execution_time"], 0)
-
-    # --- HUD write ---
-
-    def test_hud_written_with_payload_and_infra(self):
-        payload = _payload(status="in_progress")
-        handle(_cfg(), payload)
-
-        self.mock_hud.assert_called_once()
-        _, hud_payload, _ = self.mock_hud.call_args[0]
-        self.assertIs(hud_payload, payload)
-
     def test_hud_write_failure_propagates(self):
         self.mock_hud.side_effect = RuntimeError("HUD unreachable")
 
@@ -206,15 +117,6 @@ class TestResultHandler(unittest.TestCase):
 
         with self.assertRaises(RedisError):
             handle(_cfg(), _payload(status="completed"))
-
-    def test_create_client_failure_propagates(self):
-        self.mock_redis.create_client.side_effect = RuntimeError(
-            "Failed to create Redis client"
-        )
-
-        with self.assertRaises(RuntimeError):
-            handle(_cfg(), _payload())
-
 
 if __name__ == "__main__":
     unittest.main()

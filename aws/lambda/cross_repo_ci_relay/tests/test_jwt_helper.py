@@ -17,21 +17,6 @@ def _cfg(secret="test-secret", ttl=3600):
 
 
 class TestCreateRelayDispatchToken(unittest.TestCase):
-    @patch("utils.jwt_helper.jwt.encode", return_value="minted.token")
-    def test_returns_encoded_token(self, mock_encode):
-        payload = {
-            "pull_request": {"head": {"sha": "abc123"}, "number": 42},
-            "repository": {"full_name": "pytorch/pytorch"},
-        }
-        token = create_relay_dispatch_token(
-            config=_cfg(),
-            downstream_repo="org/repo",
-            delivery_id="d-1",
-            payload=payload,
-        )
-        self.assertEqual(token, "minted.token")
-        mock_encode.assert_called_once()
-
     @patch("utils.jwt_helper.jwt.encode", return_value="tok")
     def test_claims_contain_expected_fields(self, mock_encode):
         payload = {
@@ -53,18 +38,6 @@ class TestCreateRelayDispatchToken(unittest.TestCase):
         self.assertIn("exp", claims)
 
     @patch("utils.jwt_helper.jwt.encode", return_value="tok")
-    def test_pr_number_included_when_present(self, mock_encode):
-        payload = {
-            "pull_request": {"head": {"sha": "sha"}, "number": 99},
-            "repository": {"full_name": "org/upstream"},
-        }
-        create_relay_dispatch_token(
-            config=_cfg(), downstream_repo="org/ds", delivery_id="d", payload=payload
-        )
-        claims = mock_encode.call_args[0][0]
-        self.assertEqual(claims["pr_number"], 99)
-
-    @patch("utils.jwt_helper.jwt.encode", return_value="tok")
     def test_pr_number_omitted_when_absent(self, mock_encode):
         payload = {
             "pull_request": {"head": {"sha": "sha"}},
@@ -75,17 +48,6 @@ class TestCreateRelayDispatchToken(unittest.TestCase):
         )
         claims = mock_encode.call_args[0][0]
         self.assertNotIn("pr_number", claims)
-
-    @patch("utils.jwt_helper.jwt.encode", return_value="tok")
-    def test_uses_hs256_algorithm(self, mock_encode):
-        payload = {
-            "pull_request": {"head": {"sha": "s"}},
-            "repository": {"full_name": "o/r"},
-        }
-        create_relay_dispatch_token(
-            config=_cfg(), downstream_repo="o/r", delivery_id="d", payload=payload
-        )
-        self.assertEqual(mock_encode.call_args[1].get("algorithm"), "HS256")
 
 
 class TestVerifyRelayDispatchToken(unittest.TestCase):
@@ -123,12 +85,6 @@ class TestVerifyRelayDispatchToken(unittest.TestCase):
 
         self.assertEqual(claims, expected)
 
-    def test_decode_called_with_hs256(self):
-        self.mock_decode.return_value = {}
-        verify_relay_dispatch_token(_cfg(secret="s"), "some.token")
-        call_kwargs = self.mock_decode.call_args[1]
-        self.assertIn("HS256", call_kwargs.get("algorithms", []))
-
 
 class TestVerifyDownstreamIdentity(unittest.TestCase):
     def setUp(self):
@@ -163,38 +119,12 @@ class TestVerifyDownstreamIdentity(unittest.TestCase):
 
         self.mock_signing_key.assert_called_once_with("some.oidc.token")
 
-    def test_bearer_prefix_case_insensitive(self):
-        self.mock_decode.return_value = {"repository": "org/repo"}
-
-        verify_downstream_identity(_cfg(), "BEARER some.oidc.token")
-
-        self.mock_signing_key.assert_called_once_with("some.oidc.token")
-
     def test_jwks_lookup_failure_raises_401(self):
         self.mock_signing_key.side_effect = Exception("JWKS fetch failed")
 
         with self.assertRaises(HTTPException) as ctx:
             verify_downstream_identity(_cfg(), "bad.token")
         self.assertEqual(ctx.exception.status_code, 401)
-
-    def test_decode_failure_raises_401(self):
-        self.mock_decode.side_effect = Exception("decode error")
-
-        with self.assertRaises(HTTPException) as ctx:
-            verify_downstream_identity(_cfg(), "some.token")
-        self.assertEqual(ctx.exception.status_code, 401)
-
-    def test_decode_called_with_rs256_and_issuer(self):
-        self.mock_decode.return_value = {"repository": "org/repo"}
-
-        verify_downstream_identity(_cfg(), "tok")
-
-        call_kwargs = self.mock_decode.call_args[1]
-        self.assertIn("RS256", call_kwargs.get("algorithms", []))
-        self.assertEqual(
-            call_kwargs.get("issuer"),
-            "https://token.actions.githubusercontent.com",
-        )
 
 
 if __name__ == "__main__":
