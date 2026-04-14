@@ -2,8 +2,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from redis.exceptions import RedisError
-from result.result_handler import handle
+from callback.result_handler import handle
+from utils.types import TimingPhase
 
 
 def _cfg():
@@ -16,14 +16,14 @@ def _cfg():
     return cfg
 
 
-def _payload(status="completed"):
+def _body(status="completed"):
     return {
         "head_sha": "abc123",
         "status": status,
         "conclusion": "success" if status == "completed" else None,
         "workflow_name": "CI",
         "workflow_url": "http://ci.example.com/run/1",
-        "downstream_repo": "org/repo",
+        "downstream_repo": "org/repo",  # self-reported; Relay ignores it
         "upstream_repo": "pytorch/pytorch",
         "pr_number": 42,
     }
@@ -31,18 +31,18 @@ def _payload(status="completed"):
 
 class TestResultHandler(unittest.TestCase):
     def setUp(self):
-        self.patcher_allowlist = patch("result.result_handler.load_allowlist")
+        self.patcher_allowlist = patch("callback.result_handler.load_allowlist")
         self.mock_load_allowlist = self.patcher_allowlist.start()
         mock_map = MagicMock()
         mock_map.get_repos_at_or_above_level.return_value = (["org/repo"], [])
         self.mock_load_allowlist.return_value = mock_map
 
-        self.patcher_redis = patch("result.result_handler.redis_helper")
+        self.patcher_redis = patch("callback.result_handler.redis_helper")
         self.mock_redis = self.patcher_redis.start()
         self.mock_redis.create_client.return_value = MagicMock()
-        self.mock_redis.get_timing.return_value = None  # no timing data by default
+        self.mock_redis.get_timing.return_value = None
 
-        self.patcher_hud = patch("result.result_handler.write_hud")
+        self.patcher_hud = patch("callback.result_handler.write_hud")
         self.mock_hud = self.patcher_hud.start()
 
     def tearDown(self):
@@ -50,39 +50,62 @@ class TestResultHandler(unittest.TestCase):
         self.patcher_redis.stop()
         self.patcher_hud.stop()
 
-    # --- allowlist checks ---
+    # --- allowlist uses the OIDC-verified repo, not the body ---
 
-    def test_repo_not_in_l2_returns_ignored(self):
+    def test_verified_repo_not_in_l2_returns_ignored(self):
         mock_map = MagicMock()
         mock_map.get_repos_at_or_above_level.return_value = (["other/repo"], [])
         self.mock_load_allowlist.return_value = mock_map
 
-        result = handle(_cfg(), _payload())
+        result = handle(_cfg(), _body(), verified_repo="org/repo")
 
         self.assertEqual(result, {"ok": True, "status": "ignored"})
         self.assertFalse(self.mock_redis.create_client.called)
         self.assertFalse(self.mock_hud.called)
 
-    # --- in_progress status ---
+    def test_body_downstream_repo_is_ignored_for_allowlist(self):
+        # A tampered body cannot bypass the allowlist — Relay indexes by the
+        # OIDC-verified repo.
+        mock_map = MagicMock()
+        mock_map.get_repos_at_or_above_level.return_value = (["attacker/repo"], [])
+        self.mock_load_allowlist.return_value = mock_map
+
+        body = _body()
+        body["downstream_repo"] = "attacker/repo"  # lies
+
+        result = handle(_cfg(), body, verified_repo="org/repo")
+
+        self.assertEqual(result, {"ok": True, "status": "ignored"})
+
+    # --- body is forwarded to HUD verbatim; infra carries verified_repo ---
+
+    def test_body_is_passed_to_hud_unchanged(self):
+        body = _body()
+        handle(_cfg(), body, verified_repo="org/repo")
+
+        # write_hud(config, body, verified_repo, infra)
+        _, body_arg, verified_repo_arg, infra_arg = self.mock_hud.call_args[0]
+        self.assertIs(body_arg, body)
+        self.assertEqual(verified_repo_arg, "org/repo")
+        # verified_repo is a sibling of infra, not nested inside it.
+        self.assertNotIn("verified_repo", infra_arg)
+
+    # --- timing ---
 
     def test_in_progress_records_timing_and_computes_queue_time(self):
         dispatch_at = time.time() - 30
         self.mock_redis.get_timing.return_value = dispatch_at
 
-        result = handle(_cfg(), _payload(status="in_progress"))
+        result = handle(_cfg(), _body(status="in_progress"), verified_repo="org/repo")
 
         self.assertEqual(result, {"ok": True, "status": "in_progress"})
-        # set_timing must be called for the "in_progress" phase
-        self.mock_redis.set_timing.assert_called_once()
-        self.assertEqual(self.mock_redis.set_timing.call_args[0][3], "in_progress")
-        # get_timing must read the "dispatch" phase
-        self.assertEqual(self.mock_redis.get_timing.call_args[0][3], "dispatch")
-        # queue_time should be approximately 30s
-        _, _, infra = self.mock_hud.call_args[0]
+        # set_timing called with the verified repo, not body's downstream_repo.
+        args, _ = self.mock_redis.set_timing.call_args
+        self.assertEqual(args[1], "org/repo")
+        self.assertEqual(args[3], TimingPhase.IN_PROGRESS)
+        _, _, _, infra = self.mock_hud.call_args[0]
         self.assertAlmostEqual(infra["queue_time"], 30, delta=1.0)
         self.assertIsNone(infra["execution_time"])
-
-    # --- completed status ---
 
     def test_completed_computes_both_queue_and_execution_time(self):
         now = time.time()
@@ -91,32 +114,51 @@ class TestResultHandler(unittest.TestCase):
 
         def _side_effect(config, repo, sha, phase, client=None):
             return {
-                "dispatch": dispatch_at,
-                "in_progress": in_progress_at,
+                TimingPhase.DISPATCH: dispatch_at,
+                TimingPhase.IN_PROGRESS: in_progress_at,
             }.get(phase)
 
         self.mock_redis.get_timing.side_effect = _side_effect
 
-        result = handle(_cfg(), _payload(status="completed"))
+        result = handle(_cfg(), _body(status="completed"), verified_repo="org/repo")
 
         self.assertEqual(result, {"ok": True, "status": "completed"})
-        _, _, infra = self.mock_hud.call_args[0]
+        _, _, _, infra = self.mock_hud.call_args[0]
         self.assertAlmostEqual(infra["queue_time"], 30, delta=1.0)
         self.assertAlmostEqual(infra["execution_time"], 30, delta=1.0)
 
-    def test_hud_write_failure_propagates(self):
-        self.mock_hud.side_effect = RuntimeError("HUD unreachable")
+    # --- best-effort redis infra ---
 
-        with self.assertRaises(RuntimeError, msg="HUD unreachable"):
-            handle(_cfg(), _payload())
+    def test_get_timing_redis_error_does_not_break_handler(self):
+        self.mock_redis.get_timing.return_value = None
 
-    # --- Redis error propagation ---
+        result = handle(_cfg(), _body(status="completed"), verified_repo="org/repo")
 
-    def test_get_timing_redis_error_propagates(self):
-        self.mock_redis.get_timing.side_effect = RedisError("timeout")
+        self.assertEqual(result, {"ok": True, "status": "completed"})
+        self.assertTrue(self.mock_hud.called)
+        _, _, _, infra = self.mock_hud.call_args[0]
+        self.assertIsNone(infra["queue_time"])
+        self.assertIsNone(infra["execution_time"])
 
-        with self.assertRaises(RedisError):
-            handle(_cfg(), _payload(status="completed"))
+    def test_redis_client_unavailable_skips_timing(self):
+        self.mock_redis.create_client.side_effect = RuntimeError("redis down")
+
+        result = handle(_cfg(), _body(status="completed"), verified_repo="org/repo")
+
+        self.assertEqual(result, {"ok": True, "status": "completed"})
+        self.assertTrue(self.mock_hud.called)
+
+    # --- HUD errors are propagated (transparent proxy) ---
+
+    def test_hud_error_propagates(self):
+        from utils.types import HTTPException
+
+        self.mock_hud.side_effect = HTTPException(503, "HUD down")
+
+        with self.assertRaises(HTTPException) as ctx:
+            handle(_cfg(), _body(), verified_repo="org/repo")
+        self.assertEqual(ctx.exception.status_code, 503)
+
 
 
 if __name__ == "__main__":

@@ -61,7 +61,6 @@ class RelayConfig:
     max_dispatch_workers: int
     hud_api_url: str
     hud_bot_key: str
-    callback_token_ttl: int
     oot_status_ttl: int
 
     @classmethod
@@ -122,13 +121,8 @@ class RelayConfig:
         allowlist_ttl_seconds = max(allowlist_ttl_seconds, 900)
 
         # GitHub can keep a workflow job in `pending` state for up to 3 days before
-        # auto-cancelling it, so the callback token and OOT-status records must live
-        # at least that long.  Default to 3 days (259200 s).
-        try:
-            callback_token_ttl = int(os.getenv("CALLBACK_TOKEN_TTL", "259200"))
-        except ValueError:
-            raise RuntimeError("CALLBACK_TOKEN_TTL must be a valid integer")
-
+        # auto-cancelling it, so OOT-status records must live at least that long.
+        # Default to 3 days (259200 s).
         try:
             oot_status_ttl = int(os.getenv("OOT_STATUS_TTL", "259200"))
         except ValueError:
@@ -146,7 +140,6 @@ class RelayConfig:
             max_dispatch_workers=int(os.getenv("MAX_DISPATCH_WORKERS", "32")),
             hud_api_url=os.getenv("HUD_API_URL", ""),
             hud_bot_key=hud_bot_key,
-            callback_token_ttl=callback_token_ttl,
             oot_status_ttl=oot_status_ttl,
         )
 

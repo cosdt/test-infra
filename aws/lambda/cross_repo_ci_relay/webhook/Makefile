@@ -4,9 +4,8 @@ AWS_REGION := us-east-1
 FUNCTION_NAME := cross_repo_ci_webhook
 
 deployment.zip: clean
-	mkdir -p ./deployment/
-	cp *.py ./deployment/
-	mkdir -p ./deployment/utils && cp $(UTILS_SRC) ./deployment/utils/
+	mkdir -p ./deployment/{webhook,utils}
+	cp *.py ./deployment/webhook/ && cp $(UTILS_SRC) ./deployment/utils/
 	pip3 install --target ./deployment -r ../requirements.txt $(PIP_FLAGS)
 	cd deployment && zip -r ../deployment.zip .
 

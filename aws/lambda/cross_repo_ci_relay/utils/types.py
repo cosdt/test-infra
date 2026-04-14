@@ -1,4 +1,5 @@
-from typing import NotRequired, TypedDict
+from enum import Enum
+from typing import TypedDict
 
 
 class HTTPException(Exception):
@@ -11,4 +12,15 @@ class EventDispatchPayload(TypedDict):
     event_type: str
     delivery_id: str
     payload: dict
-    callback_token: NotRequired[str]
+
+
+class TimingPhase(str, Enum):
+    """Phases recorded in the crcr:timing:* Redis keys.
+
+    - ``DISPATCH``: webhook side, when a repository_dispatch is fired.
+    - ``IN_PROGRESS``: result side, when the downstream workflow reports it
+      has started running.
+    """
+
+    DISPATCH = "dispatch"
+    IN_PROGRESS = "in_progress"

@@ -35,13 +35,56 @@ The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL 
 
 L2+ downstream repositories can report the status of their CI workflows back to the relay server using the [`cross-repo-ci-relay-callback`](../../../.github/actions/cross-repo-ci-relay-callback/action.yml) composite action.
 
-### Security
+### Security and the Relay/HUD boundary
 
-For security purpose, a request to the `result` lambda function must proceed the following authentication checks:
+The result endpoint is a **transparent proxy to HUD** with a single security
+responsibility: identifying the calling repo.  Everything else is HUD's job.
 
-- Webhook JWT check: ensure the request is triggered from the `webhook` lambda function
-- OIDC check: ensure the request is sent from GitHub rather than anybody else
-- Payload check: ensure the request is sent from the qualified repositories written in `allowlist`
+- **Identity (Relay's job)**: the `Authorization: Bearer <oidc-token>` header
+  is verified against GitHub's JWKS.  The OIDC `repository` claim is the
+  only trusted identity for the caller and is used for the L2+ allowlist
+  check.  Relay forwards this trusted value to HUD under
+  `infra.verified_repo`; HUD should prefer it over anything self-reported
+  in the body.
+- **Schema / business validation (HUD's job)**: the callback body is passed
+  through to HUD verbatim as a top-level `body` field.  Relay does **not**
+  validate `status`, `conclusion`, `head_sha`, `pr_number`, `test_results`,
+  or any other field — HUD owns the schema since it owns persistence.
+  The HUD request looks like:
+
+  ```json
+  {
+    "body": { ... workflow callback body verbatim ... },
+    "verified_repo": "org/repo",
+    "infra": { "queue_time": 1.23, "execution_time": 45.6 }
+  }
+  ```
+- **Response (transparent)**: HUD's HTTP status is propagated back to the
+  downstream workflow.  A 4xx from HUD surfaces the same 4xx to the
+  caller, so schema bugs fail loudly in the workflow run.
+
+#### Known limitations of this model
+
+A compromised or malicious maintainer of an allowlisted repo can:
+
+1. Fabricate status/conclusion values for upstream PRs their repo was never
+   dispatched for — HUD will receive the row, but `infra.verified_repo`
+   always identifies the true caller.
+2. Replay an older dispatched payload against the result endpoint — there
+   is no dispatch-side nonce.
+3. Tamper with any body field, including `downstream_repo` — HUD must
+   trust `infra.verified_repo`, not the body.
+
+All three attacks are **scoped to the attacker's own OIDC-authenticated
+repo identity** — OIDC guarantees they cannot impersonate another
+allowlisted repo.  Mitigation is operational: every HUD row carries
+`infra.verified_repo`, so misbehaviour is observable, and the offending
+repo can be removed from `allowlist.yaml`.
+
+If stronger guarantees are required later, the typical next step is a
+signed callback token minted by the webhook side plus a one-shot state
+machine in Redis keyed on `delivery_id`.  This was intentionally deferred
+to keep the relay simple — see the PR description for the discussion.
 
 ### Prerequisites
 

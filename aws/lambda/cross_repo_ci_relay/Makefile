@@ -1,21 +1,24 @@
-RESULT_DIR := result
-WEBHOOK_DIR := webhook
-RESULT_FUNCTION_NAME ?= cross_repo_ci_result
-WEBHOOK_FUNCTION_NAME ?= cross_repo_ci_webhook
 AWS_REGION ?= us-east-1
+CALLBACK_FUNCTION_NAME ?= cross_repo_ci_callback
+WEBHOOK_FUNCTION_NAME  ?= cross_repo_ci_webhook
+
+.PHONY: test deploy deploy-callback deploy-webhook clean
 
 test:
 	python3 -m pytest tests -v
 
+# Deploy both; keep going on failure so a broken half doesn't block the other.
 deploy:
-	@status=0; \
-	$(MAKE) -C $(RESULT_DIR) deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(RESULT_FUNCTION_NAME) || status=$$?; \
-	$(MAKE) -C $(WEBHOOK_DIR) deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(WEBHOOK_FUNCTION_NAME) || status=$$?; \
-	exit $$status
+	@rc=0; \
+	for t in deploy-callback deploy-webhook; do $(MAKE) $$t || rc=$$?; done; \
+	exit $$rc
+
+deploy-callback:
+	$(MAKE) -C callback deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(CALLBACK_FUNCTION_NAME)
+
+deploy-webhook:
+	$(MAKE) -C webhook deploy AWS_REGION=$(AWS_REGION) FUNCTION_NAME=$(WEBHOOK_FUNCTION_NAME)
 
 clean:
-	$(MAKE) -C $(RESULT_DIR) clean
-	$(MAKE) -C $(WEBHOOK_DIR) clean
-	rm -rf .pytest_cache __pycache__ result/__pycache__ webhook/__pycache__ utils/__pycache__ tests/__pycache__
-
-.PHONY: test deploy clean
+	$(MAKE) -C callback clean
+	$(MAKE) -C webhook clean

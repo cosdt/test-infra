@@ -79,6 +79,12 @@ runs:
         except json.JSONDecodeError as exc:
             sys.exit(f"::error::github.event.client_payload is not valid JSON: {exc}")
 
+        if not isinstance(client_payload, dict):
+            sys.exit(
+                "::error::github.event.client_payload must be a JSON object; "
+                "is this workflow running under a repository_dispatch trigger?"
+            )
+
         client_payload["status"] = status
         client_payload["conclusion"] = conclusion
         client_payload["workflow_name"] = os.environ["WORKFLOW_NAME"]

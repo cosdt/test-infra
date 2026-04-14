@@ -8,11 +8,7 @@ from utils.config import get_config
 from utils.lambda_utils import JSON_HEADERS, parse_lambda_event
 from utils.types import HTTPException
 
-
-try:
-    from . import result_handler
-except ImportError:
-    import result_handler
+import result_handler
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,17 +34,19 @@ def lambda_handler(event, context):
 
     try:
         config = get_config()
-        token = headers.get("authorization", "")
-        payload = json.loads(body_bytes) if body_bytes else {}
-        if not token:
-            raise HTTPException(401, "Missing authorization token")
-        oidc_claims = jwt_helper.verify_downstream_identity(config, token)
-        dispatch_claims = jwt_helper.verify_relay_dispatch_token(
-            config, payload.get("callback_token", "")
+        body = json.loads(body_bytes) if body_bytes else {}
+
+        # OIDC is the only identity check Relay performs.  The callback body is
+        # passed through to HUD untouched — HUD owns schema/business validation.
+        # Relay reports the OIDC-verified repo to HUD separately via
+        # `infra.verified_repo` so HUD has a trusted source of truth for the
+        # caller's identity.
+        oidc_claims = jwt_helper.verify_oidc_token(
+            config, headers.get("authorization", "")
         )
-        payload["downstream_repo"] = oidc_claims.get("repository", "")
-        payload["head_sha"] = dispatch_claims.get("head_sha", "")
-        result = result_handler.handle(config, payload)
+        verified_repo = oidc_claims["repository"]
+
+        result = result_handler.handle(config, body, verified_repo)
         return {"statusCode": 200, "headers": JSON_HEADERS, "body": json.dumps(result)}
 
     except json.JSONDecodeError:
