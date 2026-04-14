@@ -1,7 +1,7 @@
 import base64
 import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from result.lambda_function import lambda_handler
 from utils.types import HTTPException
@@ -155,6 +155,7 @@ class TestResultLambdaHandler(unittest.TestCase):
         self.assertEqual(
             json.loads(response["body"])["detail"], "Internal server error"
         )
+
 
 if __name__ == "__main__":
     unittest.main()

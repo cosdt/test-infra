@@ -118,5 +118,6 @@ class TestResultHandler(unittest.TestCase):
         with self.assertRaises(RedisError):
             handle(_cfg(), _payload(status="completed"))
 
+
 if __name__ == "__main__":
     unittest.main()
