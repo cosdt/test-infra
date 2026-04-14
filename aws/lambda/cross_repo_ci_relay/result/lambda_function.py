@@ -8,8 +8,11 @@ from utils.config import get_config
 from utils.lambda_utils import JSON_HEADERS, parse_lambda_event
 from utils.types import HTTPException
 
-from . import result_handler
 
+try:
+    from . import result_handler
+except ImportError:
+    import result_handler
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
