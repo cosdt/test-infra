@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class HTTPException(Exception):
@@ -11,3 +11,4 @@ class EventDispatchPayload(TypedDict):
     event_type: str
     delivery_id: str
     payload: dict
+    callback_token: NotRequired[str]

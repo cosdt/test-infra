@@ -2,8 +2,8 @@ import unittest
 from unittest.mock import MagicMock
 
 import redis as redis_lib
-import redis_helper
-from redis_helper import (
+from utils import redis_helper
+from utils.redis_helper import (
     _ALLOWLIST_CACHE_KEY,
     create_client,
     get_cached_yaml,

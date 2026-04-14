@@ -13,10 +13,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlparse
 
-import gh_helper
-import redis_helper
 import yaml
-from config import RelayConfig
+
+from . import gh_helper, redis_helper
+from .config import RelayConfig
 
 
 logger = logging.getLogger(__name__)

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from concurrent.futures import as_completed, ThreadPoolExecutor
 
-import gh_helper
-from allowlist import AllowlistLevel, load_allowlist
-from config import RelayConfig
-from utils import EventDispatchPayload, HTTPException
+from utils import gh_helper, jwt_helper, redis_helper
+from utils.allowlist import AllowlistLevel, load_allowlist
+from utils.config import RelayConfig
+from utils.types import EventDispatchPayload, HTTPException
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,13 @@ def _dispatch_one(
     event_type: str,
     client_payload: EventDispatchPayload,
 ) -> None:
+    dispatch_payload = dict(client_payload)
+    dispatch_payload["callback_token"] = jwt_helper.create_relay_dispatch_token(
+        config=config,
+        downstream_repo=downstream_repo,
+        delivery_id=client_payload["delivery_id"],
+        payload=client_payload["payload"],
+    )
     installation_token = gh_helper.get_repo_access_token(
         config.github_app_id,
         config.github_app_private_key,
@@ -30,8 +38,20 @@ def _dispatch_one(
         token=installation_token,
         repo_full_name=downstream_repo,
         event_type=event_type,
-        client_payload=client_payload,
+        client_payload=dispatch_payload,
     )
+    # Record dispatch timestamp for timing calculations (best-effort)
+    try:
+        pr_head = ((client_payload.get("payload") or {}).get("pull_request") or {}).get(
+            "head", {}
+        )
+        head_sha = pr_head.get("sha") or ""
+        if head_sha:
+            redis_helper.set_timing(
+                config, downstream_repo, head_sha, "dispatch", time.time()
+            )
+    except Exception:
+        logger.exception("Failed to record dispatch time for %s", downstream_repo)
 
 
 def _dispatch_to_allowlist(
@@ -77,13 +97,12 @@ def _dispatch_to_allowlist(
                 )
                 dispatched.append({"repo": downstream_repo})
             except Exception as e:
-                error_message = str(e)
-                logger.error(
-                    "dispatch failed event_type=%s repo=%s error=%s",
+                logger.exception(
+                    "dispatch failed event_type=%s repo=%s",
                     event_type,
                     downstream_repo,
-                    error_message,
                 )
+                error_message = str(e)
                 failed.append(
                     {
                         "repo": downstream_repo,

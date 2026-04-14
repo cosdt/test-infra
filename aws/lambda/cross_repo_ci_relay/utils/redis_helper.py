@@ -1,9 +1,13 @@
+import json
 import logging
 import os
+from typing import cast
 from urllib.parse import quote
 
 import redis as redis_lib
-from config import RelayConfig
+from redis.exceptions import RedisError
+
+from .config import RelayConfig
 
 
 logger = logging.getLogger(__name__)
@@ -69,17 +73,20 @@ def create_client(config: RelayConfig) -> redis_lib.Redis:
     """Create or reuse a Redis client for the given config."""
     global _cached_client
     global _cached_client_url
+    try:
+        redis_url = _build_url(config)
+        if _cached_client is not None and _cached_client_url == redis_url:
+            return _cached_client
 
-    redis_url = _build_url(config)
-    if _cached_client is not None and _cached_client_url == redis_url:
-        return _cached_client
-
-    client = redis_lib.from_url(
-        redis_url,
-        decode_responses=True,
-        socket_connect_timeout=2,
-        socket_timeout=2,
-    )
+        client = redis_lib.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+    except Exception:
+        logger.exception("Error creating Redis client")
+        raise RuntimeError("Failed to create Redis client")
     _cached_client = client
     _cached_client_url = redis_url
     return client
@@ -95,12 +102,10 @@ def get_cached_yaml(
         value = client.get(_ALLOWLIST_CACHE_KEY)
         if value is not None:
             logger.info("allowlist cache hit key=%s", _ALLOWLIST_CACHE_KEY)
-        return value
-    except redis_lib.exceptions.RedisError as exc:
-        error_message = str(exc)
-        logger.warning(
-            "redis cache read failed, falling back to source: %s",
-            error_message,
+        return cast(str | None, value)
+    except RedisError:
+        logger.exception(
+            "redis cache read failed, falling back to source",
         )
         return None
 
@@ -116,9 +121,50 @@ def set_cached_yaml(
         logger.info(
             "allowlist cached %d bytes key=%s", len(yaml_str), _ALLOWLIST_CACHE_KEY
         )
-    except redis_lib.exceptions.RedisError as exc:
-        error_message = str(exc)
-        logger.warning(
-            "redis cache write failed, continuing without cache: %s",
-            error_message,
-        )
+    except RedisError:
+        logger.exception("redis cache write failed, continuing without cache")
+
+
+# --- Timing helpers ---
+_TIMING_PREFIX = "crcr:timing:"
+
+
+def _timing_key(downstream_repo: str, head_sha: str, phase: str) -> str:
+    owner, repo_name = downstream_repo.split("/", 1)
+    return _TIMING_PREFIX + owner + ":" + repo_name + ":" + head_sha + ":" + phase
+
+
+def set_timing(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    phase: str,
+    ts: float,
+    client: redis_lib.Redis | None = None,
+) -> None:
+    """Set timestamp for downstream repo+sha. Best-effort."""
+    try:
+        if client is None:
+            client = create_client(config)
+        key = _timing_key(downstream_repo, head_sha)
+        client.setex(key, config.oot_status_ttl, ts)
+        logger.info("%s timing dispatch cached key=%s", phase, key)
+    except RedisError:
+        logger.exception("redis set_dispatch_time failed")
+
+
+def get_timing(
+    config: RelayConfig,
+    downstream_repo: str,
+    head_sha: str,
+    phase: str,
+    client: redis_lib.Redis | None = None,
+) -> dict | None:
+    """Return timing record or None on miss. Re-raises RedisError to let callers detect infra failures if needed."""
+    if client is None:
+        client = create_client(config)
+    key = _timing_key(downstream_repo, head_sha, phase)
+    value = client.get(key)
+    if value is None:
+        return None
+    return json.loads(value)

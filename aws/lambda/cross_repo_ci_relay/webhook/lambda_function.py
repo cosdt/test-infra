@@ -6,15 +6,14 @@ import hmac
 import json
 import logging
 
-import event_handler
-from config import RelayConfig
-from utils import HTTPException
+from utils.config import get_config
+from utils.types import HTTPException
+
+from . import event_handler
 
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
-
-_cached_config: RelayConfig | None = None
 
 
 def _verify_signature(secret: str, body: bytes, signature: str) -> None:
@@ -29,13 +28,6 @@ def _verify_signature(secret: str, body: bytes, signature: str) -> None:
 
 _JSON_HEADERS = {"content-type": "application/json"}
 _SUPPORTED_EVENTS = frozenset({"pull_request", "push"})
-
-
-def _get_config() -> RelayConfig:
-    global _cached_config
-    if _cached_config is None:
-        _cached_config = RelayConfig.from_env()
-    return _cached_config
 
 
 def lambda_handler(event, context):
@@ -77,7 +69,7 @@ def lambda_handler(event, context):
         }
 
     try:
-        config = _get_config()
+        config = get_config()
 
         _verify_signature(
             config.github_app_secret, body_bytes, headers.get("x-hub-signature-256", "")

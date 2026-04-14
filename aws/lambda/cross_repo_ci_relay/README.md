@@ -31,18 +31,81 @@ Each entry is either a plain `owner/repo` string or a `owner/repo: oncall1, onca
 
 The allowlist is cached in Redis under the key `crcr:allowlist_yaml` with a TTL controlled by `ALLOWLIST_TTL_SECONDS`. On a Redis error the function falls back to fetching directly from GitHub.
 
+## Reporting Results from Downstream CI
+
+L2+ downstream repositories can report the status of their CI workflows back to the relay server using the [`cross-repo-ci-relay-callback`](../../../.github/actions/cross-repo-ci-relay-callback/action.yml) composite action.
+
+### Security
+
+For security purpose, a request to the `result` lambda function must proceed the following authentication checks:
+
+- Webhook JWT check: ensure the request is triggered from the `webhook` lambda function
+- OIDC check: ensure the request is sent from GitHub rather than anybody else
+- Payload check: ensure the request is sent from the qualified repositories written in `allowlist`
+
+### Prerequisites
+
+- The downstream repository must be listed at level **L2 or higher** in the allowlist.
+- The **calling job** must declare `permissions: id-token: write` so that the action can mint a GitHub OIDC token for authentication.
+
+### Usage
+
+When triggered by a relay `repository_dispatch`, `pr-number`, `head-sha`, and `upstream-repo` are **automatically resolved** from `github.event.client_payload` — only `status` (and `conclusion` for the final report) need to be provided explicitly.
+
+```yaml
+on:
+  repository_dispatch:
+    types: [pull_request]
+
+jobs:
+  my-ci-job:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required for OIDC token minting
+      contents: read
+    steps:
+      - name: Report in-progress to relay
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      # ... your CI steps ...
+
+      - name: Report final result to relay
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ job.status == 'success' && 'success' || 'failure' }}
+```
+
+### Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `status` | **yes** | — | `in_progress` or `completed` |
+| `conclusion` | no | `''` | `success` or `failure` (required when `status=completed`) |
+| `callback-url` | no | see `action.yml` | result callback url for local testing |
+
 ## Build, Deploy, and Test
 
 ### Make Targets
 
-Build the Lambda zip (output: deployment.zip)
+Build the Webhook Lambda zip (output: deployment.zip)
 ```bash
+cd webhook
 make deployment.zip
 ```
 
-Deploy to AWS Lambda (requires AWS CLI v2 configured with permissions)
+Build the Result Lambda zip (output: deployment.zip)
 ```bash
-make deploy AWS_REGION=us-east-1 FUNCTION_NAME=crcr-prod-crcr-webhook
+cd result
+make deployment.zip
+```
+
+Deploy both zip to AWS Lambda (requires AWS CLI v2 configured with permissions)
+```bash
+make deploy AWS_REGION=us-east-1 WEBHOOK_FUNCTION_NAME=cross_repo_ci_webhook RESULT_FUNCTION_NAME=cross_repo_ci_result
 ```
 
 Run all unit tests under tests/ folder
@@ -72,10 +135,18 @@ make clean
     redis:7-alpine \
     redis-server --requirepass <your-password>
   ```
-- [smee.io](https://smee.io) CLI to forward GitHub webhook events to localhost (paste this link to GitHub App webhook URL):
+- [smee.io](https://smee.io)
+
+  CLI to forward GitHub webhook events to localhost (paste this link to GitHub App webhook URL):
   ```bash
   npm install -g smee-client
   smee --url https://smee.io/<your-channel> --path /github/webhook --port 8000
+  ```
+
+  CLI to forward GitHub result callbacks to localhost (should set this url to `callback-url` in downstream workflow):
+  ```bash
+  npm install -g smee-client
+  smee --url https://smee.io/<your-channel> --path /github/result --port 8000
   ```
 
 #### Remote
@@ -118,3 +189,5 @@ make clean
    ```
 
 4. Point your GitHub App's webhook URL to the smee.io channel, then open or update a pull request in the upstream repo to trigger a full relay cycle.
+
+5. Check and see whether the workflow run status is uploaded through `callback-url`.
