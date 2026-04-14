@@ -146,9 +146,9 @@ def set_timing(
     try:
         if client is None:
             client = create_client(config)
-        key = _timing_key(downstream_repo, head_sha)
+        key = _timing_key(downstream_repo, head_sha, phase)
         client.setex(key, config.oot_status_ttl, ts)
-        logger.info("%s timing dispatch cached key=%s", phase, key)
+        logger.info("%s timing cached key=%s", phase, key)
     except RedisError:
         logger.exception("redis set_dispatch_time failed")
 
@@ -159,8 +159,10 @@ def get_timing(
     head_sha: str,
     phase: str,
     client: redis_lib.Redis | None = None,
-) -> dict | None:
-    """Return timing record or None on miss. Re-raises RedisError to let callers detect infra failures if needed."""
+) -> float | None:
+    """Return the stored timestamp as a float, or None on cache miss.
+    Re-raises RedisError to let callers detect infra failures if needed.
+    """
     if client is None:
         client = create_client(config)
     key = _timing_key(downstream_repo, head_sha, phase)

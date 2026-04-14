@@ -4,7 +4,6 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-import utils.config as config_module
 from utils.types import HTTPException
 from webhook.lambda_function import lambda_handler
 
@@ -54,7 +53,9 @@ def _event(*, method="POST", path="/github/webhook", body=None, headers=None):
 
 class TestLambdaHandler(unittest.TestCase):
     def setUp(self):
-        config_module._cached_config = None
+        import utils.config
+
+        utils.config._cached_config = None
 
     def test_route_error_404_and_405(self):
         self.assertEqual(lambda_handler(_event(path="/other"), None)["statusCode"], 404)

@@ -15,7 +15,6 @@ import logging
 import time
 
 import jwt
-
 from utils.config import RelayConfig
 from utils.types import HTTPException
 

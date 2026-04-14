@@ -96,9 +96,6 @@ class AllowlistMap:
             oncalls.extend(lvl_oncalls)
         return repos, oncalls
 
-    def __bool__(self) -> bool:
-        return any(bool(entries) for entries in self._levels.values())
-
     @classmethod
     def _parse(cls, raw: dict) -> "AllowlistMap":
         if not isinstance(raw, dict):
