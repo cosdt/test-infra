@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: configure aws credentials
         id: aws_creds
-        uses: aws-actions/configure-aws-credentials@50ac8dd1e1b10d09dac7b8727528b91bed831ac0 # v3.0.2
+        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
         with:
           role-to-assume: arn:aws:iam::749337293305:role/gha_workflow_s3_update
           aws-region: us-east-1
