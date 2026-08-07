@@ -130,9 +130,6 @@ class AllowlistMap:
     def needs_check_run(self, repo: str, pr_labels: set[str]) -> bool:
         """Return True when an upstream check run should be created for this repo.
 
-        L4+: always True.
-        L3: True only when the matching ciflow/crcr/<device> label is present.
-        L1/L2/unknown: False.
         """
         level = self.get_repo_level(repo)
         if level is None or level.value < AllowlistLevel.L3.value:
