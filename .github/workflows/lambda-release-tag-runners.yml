@@ -17,6 +17,10 @@ jobs:
     name: Create Release Tag
     runs-on: ubuntu-latest
     container: node:20
+    # contents: write lets GITHUB_TOKEN create the tag on forks, where the
+    # GitHub App (TAG_RELEASE) is not installed.
+    permissions:
+      contents: write
     outputs:
       date: ${{ steps.date.outputs.date }}
       tag_name: ${{ steps.tag.outputs.tag_name }}
@@ -38,8 +42,13 @@ jobs:
             echo "tag_name=v${{ steps.date.outputs.date }}-custom" >> "${GITHUB_OUTPUT}"
           fi
 
+      # Mint a GitHub App token to create the release tag. On forks (or any
+      # repo where the TAG_RELEASE secret / app install is unavailable) this
+      # step fails; we tolerate that and fall back to GITHUB_TOKEN so a manual
+      # workflow_dispatch can still produce a release on a fork.
       - uses: actions/create-github-app-token@v2
         id: app-token
+        continue-on-error: true
         with:
           app-id: 811065
           private-key: ${{ secrets.TAG_RELEASE }}
@@ -47,9 +56,9 @@ jobs:
       - name: Tag snapshot
         uses: tvdias/github-tagger@a570476cc87352c1655c606b29590df6014535e0 # v0.0.1
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
         with:
-          repo-token: ${{ steps.app-token.outputs.token }}
+          repo-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           tag: ${{ steps.tag.outputs.tag_name }}
 
       - name: Write tag to summary
